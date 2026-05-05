@@ -34,6 +34,32 @@ class TestCadAgentInit:
         assert agent.on_status is not None
 
 
+class TestCadScriptSafety:
+    """Test local execution safeguards for generated CAD scripts."""
+
+    def test_generated_code_blocks_dangerous_imports(self):
+        """Generated CAD code should not be allowed to import system modules."""
+        agent = CadAgent()
+
+        is_safe, error = agent._validate_generated_code("import os\nprint(os.getcwd())")
+
+        assert is_safe is False
+        assert "blocked module 'os'" in error
+
+    @pytest.mark.asyncio
+    async def test_generated_script_timeout(self, tmp_path):
+        """Generated CAD scripts should not be able to hang the agent forever."""
+        agent = CadAgent()
+        agent.script_timeout_seconds = 1
+        script_path = tmp_path / "current_design.py"
+        script_path.write_text("while True:\n    pass\n", encoding="utf-8")
+
+        result = await agent._run_generated_script(str(script_path))
+
+        assert result.returncode == 124
+        assert "timed out" in result.stderr
+
+
 class TestCadGeneration:
     """Test CAD generation (requires API key)."""
     

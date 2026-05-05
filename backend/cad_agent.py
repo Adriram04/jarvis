@@ -1,6 +1,9 @@
 import os
 import json
 import asyncio
+import ast
+import subprocess
+import sys
 from datetime import datetime
 from google import genai
 from google.genai import types
@@ -10,6 +13,27 @@ from typing import List, Optional
 
 load_dotenv()
 
+DEFAULT_CAD_SCRIPT_TIMEOUT_SECONDS = 30
+BLOCKED_GENERATED_CODE_IMPORTS = {
+    "ctypes",
+    "importlib",
+    "os",
+    "pathlib",
+    "requests",
+    "shutil",
+    "socket",
+    "subprocess",
+    "sys",
+}
+BLOCKED_GENERATED_CODE_CALLS = {
+    "__import__",
+    "compile",
+    "eval",
+    "exec",
+    "input",
+    "open",
+}
+
 class CadAgent:
     def __init__(self, on_thought=None, on_status=None):
         self.client = genai.Client(http_options={"api_version": "v1beta"}, api_key=os.getenv("GEMINI_API_KEY"))
@@ -17,6 +41,7 @@ class CadAgent:
         self.model = "gemini-3-pro-preview"
         self.on_thought = on_thought  # Callback for streaming thoughts 
         self.on_status = on_status  # Callback for retry status info
+        self.script_timeout_seconds = self._resolve_script_timeout_seconds()
         
         self.system_instruction = """
 You are a Python-based 3D CAD Engineer using the `build123d` library.
@@ -59,6 +84,91 @@ result_part = p.part
 export_stl(result_part, 'output.stl')
 ```
 """
+
+    def _resolve_script_timeout_seconds(self):
+        raw_value = os.getenv("JARVIS_CAD_SCRIPT_TIMEOUT_SECONDS")
+        if not raw_value:
+            return DEFAULT_CAD_SCRIPT_TIMEOUT_SECONDS
+
+        try:
+            timeout = int(raw_value)
+        except ValueError:
+            print(f"[CadAgent DEBUG] [WARN] Invalid JARVIS_CAD_SCRIPT_TIMEOUT_SECONDS='{raw_value}'. Using default.")
+            return DEFAULT_CAD_SCRIPT_TIMEOUT_SECONDS
+
+        return max(1, timeout)
+
+    def _validate_generated_code(self, code):
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            return False, f"Generated script has a syntax error: {exc}"
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root_name = alias.name.split(".")[0]
+                    if root_name in BLOCKED_GENERATED_CODE_IMPORTS:
+                        return False, f"Generated script imports blocked module '{root_name}'."
+
+            elif isinstance(node, ast.ImportFrom):
+                root_name = (node.module or "").split(".")[0]
+                if root_name in BLOCKED_GENERATED_CODE_IMPORTS:
+                    return False, f"Generated script imports blocked module '{root_name}'."
+
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in BLOCKED_GENERATED_CODE_CALLS:
+                    return False, f"Generated script calls blocked function '{node.func.id}'."
+
+        return True, ""
+
+    def _normalize_subprocess_output(self, value):
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode(errors="replace")
+        return str(value)
+
+    async def _run_generated_script(self, script_path):
+        work_dir = os.path.dirname(os.path.abspath(script_path))
+
+        try:
+            return await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                cwd=work_dir,
+                timeout=self.script_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = self._normalize_subprocess_output(exc.stdout)
+            stderr = self._normalize_subprocess_output(exc.stderr)
+            timeout_msg = (
+                f"CAD script timed out after {self.script_timeout_seconds} seconds. "
+                "The generated code may contain an infinite loop or overly heavy geometry."
+            )
+            combined_stderr = "\n".join(part for part in (stderr, timeout_msg) if part)
+            print(f"[CadAgent DEBUG] [TIMEOUT] {timeout_msg}")
+            return subprocess.CompletedProcess(exc.cmd, 124, stdout, combined_stderr)
+        except Exception as exc:
+            print(f"[CadAgent DEBUG] [ERR] Subprocess run failed: {exc}")
+            return subprocess.CompletedProcess([sys.executable, script_path], 1, "", str(exc))
+
+    async def _write_and_run_generated_script(self, script_path, code, output_stl):
+        is_safe, safety_error = self._validate_generated_code(code)
+        if not is_safe:
+            print(f"[CadAgent DEBUG] [BLOCKED] {safety_error}")
+            return subprocess.CompletedProcess([sys.executable, script_path], 1, "", safety_error)
+
+        safe_output_path = output_stl.replace("\\", "\\\\")
+        code_with_path = code.replace("output.stl", safe_output_path)
+
+        with open(script_path, "w") as f:
+            f.write(code_with_path)
+
+        print(f"[CadAgent DEBUG] [EXEC] Running local script: {script_path}")
+        return await self._run_generated_script(script_path)
 
     async def generate_prototype(self, prompt: str, output_dir: Optional[str] = None):
         """
@@ -141,35 +251,9 @@ export_stl(result_part, 'output.stl')
                         print("[CadAgent DEBUG] [ERR] Could not extract python code.")
                         return None
                 
-                # 3. Save to Local File in cad_outputs folder
-                # Fix for Windows paths in python strings: escape backslashes
-                safe_output_path = output_stl.replace("\\", "\\\\")
-                
-                with open(script_path, "w") as f:
-                    # Inject output path into the script
-                    code_with_path = code.replace("output.stl", safe_output_path)
-                    f.write(code_with_path)
-                    
-                print(f"[CadAgent DEBUG] [EXEC] Running local script: {script_path}")
-                
-                # 4. Execute Locally
-                import subprocess
-                import sys
-                
-                # Use the current Python interpreter (unified environment with build123d + mediapipe)
-                try:
-                    proc = await asyncio.to_thread(
-                        subprocess.run,
-                        [sys.executable, script_path],
-                        capture_output=True,
-                        text=True
-                    )
-                    stdout, stderr = proc.stdout, proc.stderr
-                except Exception as e:
-                     print(f"[CadAgent DEBUG] [ERR] Subprocess run failed: {e}")
-                     proc = type('obj', (object,), {'returncode': 1})
-                     stdout = ""
-                     stderr = str(e)
+                # 3. Save and execute locally with lightweight safety checks and timeout.
+                proc = await self._write_and_run_generated_script(script_path, code, output_stl)
+                stdout, stderr = proc.stdout, proc.stderr
                 
                 if proc.returncode != 0:
                     error_msg = stderr
@@ -357,38 +441,9 @@ Ensure you still export to 'output.stl'.
                         print("[CadAgent DEBUG] [ERR] Could not extract python code.")
                         return None
                 
-                # 3. Save to Local File in cad_outputs folder
-                # Overwrite the script so the next iteration builds on this one
-                
-                # Fix for Windows paths in python strings: escape backslashes
-                safe_output_path = output_stl.replace("\\", "\\\\")
-                
-                with open(script_path, "w") as f:
-                    # Inject output path into the script
-                    code_with_path = code.replace("output.stl", safe_output_path)
-                    f.write(code_with_path)
-                    
-                print(f"[CadAgent DEBUG] [EXEC] Running local script: {script_path}")
-                
-                # 4. Execute Locally
-                import subprocess
-                import sys
-                
-                # Use asyncio.to_thread for Windows compatibility (asyncio.create_subprocess_exec
-                # throws NotImplementedError on Windows with certain event loop policies)
-                try:
-                    proc = await asyncio.to_thread(
-                        subprocess.run,
-                        [sys.executable, script_path],
-                        capture_output=True,
-                        text=True
-                    )
-                    stdout, stderr = proc.stdout, proc.stderr
-                except Exception as e:
-                    print(f"[CadAgent DEBUG] [ERR] Subprocess run failed: {e}")
-                    proc = type('obj', (object,), {'returncode': 1})()
-                    stdout = ""
-                    stderr = str(e)
+                # 3. Overwrite, then execute locally with lightweight safety checks and timeout.
+                proc = await self._write_and_run_generated_script(script_path, code, output_stl)
+                stdout, stderr = proc.stdout, proc.stderr
                 
                 if proc.returncode != 0:
                     error_msg = stderr
