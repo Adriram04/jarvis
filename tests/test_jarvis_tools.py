@@ -34,6 +34,18 @@ class TestToolDefinitions:
         assert 'parameters' in run_web_agent
         assert 'prompt' in run_web_agent['parameters']['properties']
         print(f"run_web_agent tool: {run_web_agent['name']}")
+
+    def test_create_directory_tool_schema(self):
+        """Test create_directory tool has correct schema."""
+        from jarvis import create_directory_tool
+
+        assert create_directory_tool['name'] == 'create_directory'
+        assert 'description' in create_directory_tool
+        assert 'parameters' in create_directory_tool
+        assert create_directory_tool['parameters']['type'] == 'OBJECT'
+        assert 'path' in create_directory_tool['parameters']['properties']
+        assert create_directory_tool['parameters']['required'] == ['path']
+        print(f"create_directory tool: {create_directory_tool['name']}")
     
     def test_print_stl_tool_schema(self):
         """Test print_stl tool has correct schema."""
@@ -122,6 +134,11 @@ class TestAudioLoopClass:
 class TestFileOperations:
     """Test file operation handlers."""
     
+    def test_create_directory_method_exists(self):
+        """Test handle_create_directory exists."""
+        from jarvis import AudioLoop
+        assert hasattr(AudioLoop, 'handle_create_directory')
+
     def test_read_directory_method_exists(self):
         """Test handle_read_directory exists."""
         from jarvis import AudioLoop
@@ -136,6 +153,55 @@ class TestFileOperations:
         """Test handle_write_file exists."""
         from jarvis import AudioLoop
         assert hasattr(AudioLoop, 'handle_write_file')
+
+    def test_project_path_resolution_blocks_escape(self, tmp_path):
+        """Test project-rooted paths cannot escape the current project."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        project_path.mkdir(parents=True)
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+
+        assert loop._resolve_project_path("docs/specs") == (project_path / "docs" / "specs").resolve()
+
+        with pytest.raises(ValueError):
+            loop._resolve_project_path("../outside")
+
+    @pytest.mark.asyncio
+    async def test_handle_create_directory_creates_folder(self, tmp_path):
+        """Test handle_create_directory creates nested folders in the project."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        project_path.mkdir(parents=True)
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        class DummySession:
+            async def send(self, input, end_of_turn):
+                self.last_message = input
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+        loop.session = DummySession()
+        loop.on_project_update = None
+
+        await loop.handle_create_directory("docs/specs")
+
+        assert (project_path / "docs" / "specs").is_dir()
+        assert "created successfully" in loop.session.last_message
 
 
 class TestLiveConnectConfig:

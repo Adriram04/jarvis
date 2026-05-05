@@ -22,7 +22,7 @@ if sys.version_info < (3, 11, 0):
     asyncio.TaskGroup = taskgroup.TaskGroup
     asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
 
-from tools import tools_list
+from tools import create_directory_tool, tools_list
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -585,6 +585,60 @@ class AudioLoop:
         except Exception as e:
              print(f"[JARVIS DEBUG] [ERR] Failed to send fs result: {e}")
 
+    def _resolve_project_path(self, path):
+        raw_path = str(path or "").strip()
+        if not raw_path:
+            raise ValueError("Path cannot be empty.")
+
+        current_project_path = self.project_manager.get_current_project_path().resolve()
+
+        # Absolute paths are reduced to their last component so file tools stay
+        # rooted in the current project workspace.
+        if os.path.isabs(raw_path):
+            raw_path = os.path.basename(os.path.normpath(raw_path))
+
+        final_path = (current_project_path / raw_path).resolve()
+        try:
+            final_path.relative_to(current_project_path)
+        except ValueError as exc:
+            raise ValueError("Path must stay inside the current project.") from exc
+
+        return final_path
+
+    async def handle_create_directory(self, path):
+        print(f"[JARVIS DEBUG] [FS] Creating directory: '{path}'")
+
+        # Auto-create project if stuck in temp, matching write_file behavior.
+        if self.project_manager.current_project == "temp":
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_project_name = f"Project_{timestamp}"
+            print(f"[JARVIS DEBUG] [FS] Auto-creating project: {new_project_name}")
+
+            success, msg = self.project_manager.create_project(new_project_name)
+            if success:
+                self.project_manager.switch_project(new_project_name)
+                try:
+                    await self.session.send(input=f"System Notification: Automatic Project Creation. Switched to new project '{new_project_name}'.", end_of_turn=False)
+                    if self.on_project_update:
+                         self.on_project_update(new_project_name)
+                except Exception as e:
+                    print(f"[JARVIS DEBUG] [ERR] Failed to notify auto-project: {e}")
+
+        try:
+            final_path = self._resolve_project_path(path)
+            final_path.mkdir(parents=True, exist_ok=True)
+            relative_path = final_path.relative_to(self.project_manager.get_current_project_path().resolve())
+            result = f"Directory '{relative_path}' created successfully in project '{self.project_manager.current_project}'."
+        except Exception as e:
+            result = f"Failed to create directory '{path}': {str(e)}"
+
+        print(f"[JARVIS DEBUG] [FS] Result: {result}")
+        try:
+             await self.session.send(input=f"System Notification: {result}", end_of_turn=True)
+        except Exception as e:
+             print(f"[JARVIS DEBUG] [ERR] Failed to send fs result: {e}")
+
     async def handle_read_directory(self, path):
         print(f"[JARVIS DEBUG] [FS] Reading directory: '{path}'")
         try:
@@ -718,7 +772,7 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "write_file", "read_directory", "read_file", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
+                            if fc.name in ["generate_cad", "run_web_agent", "create_directory", "write_file", "read_directory", "read_file", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
                                 
                                 # Check Permissions (Default to True if not set)
@@ -810,6 +864,15 @@ class AudioLoop:
                                     asyncio.create_task(self.handle_write_file(path, content))
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": "Writing file..."}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "create_directory":
+                                    path = fc.args["path"]
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'create_directory' path='{path}'")
+                                    asyncio.create_task(self.handle_create_directory(path))
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": "Creating directory..."}
                                     )
                                     function_responses.append(function_response)
 

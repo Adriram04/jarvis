@@ -35,6 +35,21 @@ write_file_tool = {
     }
 }
 
+create_directory_tool = {
+    "name": "create_directory",
+    "description": "Creates a directory inside the current project workspace.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "path": {
+                "type": "STRING",
+                "description": "The relative directory path to create inside the current project."
+            }
+        },
+        "required": ["path"]
+    }
+}
+
 read_directory_tool = {
     "name": "read_directory",
     "description": "Lists the contents of a directory.",
@@ -68,6 +83,7 @@ read_file_tool = {
 tools_list = [{"function_declarations": [
     generate_cad_prototype_tool,
     write_file_tool,
+    create_directory_tool,
     read_directory_tool,
     read_file_tool
 ]}]

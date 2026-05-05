@@ -69,6 +69,7 @@ DEFAULT_SETTINGS = {
     "tool_permissions": {
         "generate_cad": True,
         "run_web_agent": True,
+        "create_directory": True,
         "write_file": True,
         "read_directory": True,
         "read_file": True,
