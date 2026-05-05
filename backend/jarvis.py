@@ -260,8 +260,8 @@ class AudioLoop:
 
         self.send_text_task = None
         self.stop_event = asyncio.Event()
-        
-        self.stop_event = asyncio.Event()
+        self.audio_stream = None
+        self.output_audio_stream = None
         
         self.permissions = {} # Default Empty (Will treat unset as True)
         self._pending_confirmations = {}
@@ -305,7 +305,44 @@ class AudioLoop:
         self.paused = paused
 
     def stop(self):
+        print("[JARVIS DEBUG] [STOP] Stop requested.")
         self.stop_event.set()
+        self.paused = False
+
+        for future in list(self._pending_confirmations.values()):
+            if not future.done():
+                future.set_result(False)
+
+        self._put_stop_sentinel(self.out_queue)
+        self._put_stop_sentinel(self.audio_in_queue)
+        self._close_stream("audio_stream")
+        self._close_stream("output_audio_stream")
+
+    def _put_stop_sentinel(self, queue):
+        if not queue:
+            return
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
+
+    def _close_stream(self, attr_name):
+        stream = getattr(self, attr_name, None)
+        if not stream:
+            return
+
+        try:
+            if hasattr(stream, "is_active") and stream.is_active():
+                stream.stop_stream()
+        except Exception:
+            pass
+
+        try:
+            stream.close()
+        except Exception:
+            pass
+        finally:
+            setattr(self, attr_name, None)
         
     def resolve_tool_confirmation(self, request_id, confirmed):
         print(f"[JARVIS DEBUG] [RESOLVE] resolve_tool_confirmation called. ID: {request_id}, Confirmed: {confirmed}")
@@ -343,8 +380,10 @@ class AudioLoop:
         # No event signal needed - listen_audio pulls it
 
     async def send_realtime(self):
-        while True:
+        while not self.stop_event.is_set():
             msg = await self.out_queue.get()
+            if msg is None:
+                break
             await self.session.send(input=msg, end_of_turn=False)
 
     async def listen_audio(self):
@@ -414,59 +453,66 @@ class AudioLoop:
         VAD_THRESHOLD = 800 # Adj based on mic sensitivity (800 is conservative for 16-bit)
         SILENCE_DURATION = 0.5 # Seconds of silence to consider "done speaking"
         
-        while True:
-            if self.paused:
-                await asyncio.sleep(0.1)
-                continue
+        try:
+            while not self.stop_event.is_set():
+                if self.paused:
+                    await asyncio.sleep(0.1)
+                    continue
 
-            try:
-                data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
-                
-                # 1. Send Audio
-                if self.out_queue:
-                    await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
-                
-                # 2. VAD Logic for Video
-                # rms = audioop.rms(data, 2)
-                # Replacement for audioop.rms(data, 2)
-                count = len(data) // 2
-                if count > 0:
-                    shorts = struct.unpack(f"<{count}h", data)
-                    sum_squares = sum(s**2 for s in shorts)
-                    rms = int(math.sqrt(sum_squares / count))
-                else:
-                    rms = 0
-                
-                if rms > VAD_THRESHOLD:
-                    # Speech Detected
-                    self._silence_start_time = None
+                try:
+                    data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
+
+                    # 1. Send Audio
+                    if self.out_queue:
+                        await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+
+                    # 2. VAD Logic for Video
+                    # rms = audioop.rms(data, 2)
+                    # Replacement for audioop.rms(data, 2)
+                    count = len(data) // 2
+                    if count > 0:
+                        shorts = struct.unpack(f"<{count}h", data)
+                        sum_squares = sum(s**2 for s in shorts)
+                        rms = int(math.sqrt(sum_squares / count))
+                    else:
+                        rms = 0
                     
-                    if not self._is_speaking:
-                        # NEW Speech Utterance Started
-                        self._is_speaking = True
-                        print(f"[JARVIS DEBUG] [VAD] Speech Detected (RMS: {rms}). Sending Video Frame.")
+                    if rms > VAD_THRESHOLD:
+                        # Speech Detected
+                        self._silence_start_time = None
                         
-                        # Send ONE frame
-                        if self._latest_image_payload and self.out_queue:
-                            await self.out_queue.put(self._latest_image_payload)
-                        else:
-                            print(f"[JARVIS DEBUG] [VAD] No video frame available to send.")
+                        if not self._is_speaking:
+                            # NEW Speech Utterance Started
+                            self._is_speaking = True
+                            print(f"[JARVIS DEBUG] [VAD] Speech Detected (RMS: {rms}). Sending Video Frame.")
                             
-                else:
-                    # Silence
-                    if self._is_speaking:
-                        if self._silence_start_time is None:
-                            self._silence_start_time = time.time()
-                        
-                        elif time.time() - self._silence_start_time > SILENCE_DURATION:
-                            # Silence confirmed, reset state
-                            print(f"[JARVIS DEBUG] [VAD] Silence detected. Resetting speech state.")
-                            self._is_speaking = False
-                            self._silence_start_time = None
+                            # Send ONE frame
+                            if self._latest_image_payload and self.out_queue:
+                                await self.out_queue.put(self._latest_image_payload)
+                            else:
+                                print(f"[JARVIS DEBUG] [VAD] No video frame available to send.")
 
-            except Exception as e:
-                print(f"Error reading audio: {e}")
-                await asyncio.sleep(0.1)
+                    else:
+                        # Silence
+                        if self._is_speaking:
+                            if self._silence_start_time is None:
+                                self._silence_start_time = time.time()
+
+                            elif time.time() - self._silence_start_time > SILENCE_DURATION:
+                                # Silence confirmed, reset state
+                                print(f"[JARVIS DEBUG] [VAD] Silence detected. Resetting speech state.")
+                                self._is_speaking = False
+                                self._silence_start_time = None
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    if self.stop_event.is_set():
+                        break
+                    print(f"Error reading audio: {e}")
+                    await asyncio.sleep(0.1)
+        finally:
+            self._close_stream("audio_stream")
 
     async def handle_cad_request(self, prompt):
         print(f"[JARVIS DEBUG] [CAD] Background Task Started: handle_cad_request('{prompt}')")
@@ -690,12 +736,16 @@ class AudioLoop:
     async def receive_audio(self):
         "Background task to reads from the websocket and write pcm chunks to the output queue"
         try:
-            while True:
+            while not self.stop_event.is_set():
                 turn = self.session.receive()
                 async for response in turn:
+                    if self.stop_event.is_set():
+                        break
+
                     # 1. Handle Audio Data
                     if data := response.data:
-                        self.audio_in_queue.put_nowait(data)
+                        if self.audio_in_queue:
+                            self.audio_in_queue.put_nowait(data)
                         # NOTE: 'continue' removed here to allow processing transcription/tools in same packet
 
                     # 2. Handle Transcription (User & Model)
@@ -1176,6 +1226,8 @@ class AudioLoop:
 
                 while not self.audio_in_queue.empty():
                     self.audio_in_queue.get_nowait()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             print(f"Error in receive_audio: {e}")
             traceback.print_exc()
@@ -1183,33 +1235,43 @@ class AudioLoop:
             raise e
 
     async def play_audio(self):
-        stream = await asyncio.to_thread(
-            pya.open,
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RECEIVE_SAMPLE_RATE,
-            output=True,
-            output_device_index=self.output_device_index,
-        )
-        while True:
-            bytestream = await self.audio_in_queue.get()
-            if self.on_audio_data:
-                self.on_audio_data(bytestream)
-            await asyncio.to_thread(stream.write, bytestream)
+        stream = None
+        try:
+            stream = await asyncio.to_thread(
+                pya.open,
+                format=FORMAT,
+                channels=CHANNELS,
+                rate=RECEIVE_SAMPLE_RATE,
+                output=True,
+                output_device_index=self.output_device_index,
+            )
+            self.output_audio_stream = stream
+            while not self.stop_event.is_set():
+                bytestream = await self.audio_in_queue.get()
+                if bytestream is None:
+                    break
+                if self.on_audio_data:
+                    self.on_audio_data(bytestream)
+                await asyncio.to_thread(stream.write, bytestream)
+        finally:
+            if stream is not None and self.output_audio_stream is stream:
+                self._close_stream("output_audio_stream")
 
     async def get_frames(self):
         cap = await asyncio.to_thread(cv2.VideoCapture, 0, cv2.CAP_AVFOUNDATION)
-        while True:
-            if self.paused:
-                await asyncio.sleep(0.1)
-                continue
-            frame = await asyncio.to_thread(self._get_frame, cap)
-            if frame is None:
-                break
-            await asyncio.sleep(1.0)
-            if self.out_queue:
-                await self.out_queue.put(frame)
-        cap.release()
+        try:
+            while not self.stop_event.is_set():
+                if self.paused:
+                    await asyncio.sleep(0.1)
+                    continue
+                frame = await asyncio.to_thread(self._get_frame, cap)
+                if frame is None:
+                    break
+                await asyncio.sleep(1.0)
+                if self.out_queue:
+                    await self.out_queue.put(frame)
+        finally:
+            cap.release()
 
     def _get_frame(self, cap):
         ret, frame = cap.read()
@@ -1245,17 +1307,18 @@ class AudioLoop:
                     self.audio_in_queue = asyncio.Queue()
                     self.out_queue = asyncio.Queue(maxsize=10)
 
-                    tg.create_task(self.send_realtime())
-                    tg.create_task(self.listen_audio())
+                    session_tasks = []
+                    session_tasks.append(tg.create_task(self.send_realtime()))
+                    session_tasks.append(tg.create_task(self.listen_audio()))
                     # tg.create_task(self._process_video_queue()) # Removed in favor of VAD
 
                     if self.video_mode == "camera":
-                        tg.create_task(self.get_frames())
+                        session_tasks.append(tg.create_task(self.get_frames()))
                     elif self.video_mode == "screen":
-                        tg.create_task(self.get_screen())
+                        session_tasks.append(tg.create_task(self.get_screen()))
 
-                    tg.create_task(self.receive_audio())
-                    tg.create_task(self.play_audio())
+                    session_tasks.append(tg.create_task(self.receive_audio()))
+                    session_tasks.append(tg.create_task(self.play_audio()))
 
                     # Handle Startup vs Reconnect Logic
                     if not is_reconnect:
@@ -1299,6 +1362,10 @@ class AudioLoop:
                     # We can await stop_event, but if the connection dies, receive_audio crashes -> group closes -> we exit `async with` -> restart loop.
                     # To ensure we don't block indefinitely if connection dies silently (unlikely with receive_audio), we just wait.
                     await self.stop_event.wait()
+                    print("[JARVIS DEBUG] [STOP] Cancelling session tasks...")
+                    for task in session_tasks:
+                        if not task.done():
+                            task.cancel()
 
             except asyncio.CancelledError:
                 print(f"[JARVIS DEBUG] [STOP] Main loop cancelled.")
@@ -1323,6 +1390,14 @@ class AudioLoop:
                         self.audio_stream.close()
                     except: 
                         pass
+                    self.audio_stream = None
+                if hasattr(self, 'output_audio_stream') and self.output_audio_stream:
+                    try:
+                        self.output_audio_stream.close()
+                    except:
+                        pass
+                    self.output_audio_stream = None
+                self.session = None
 
 def get_input_devices():
     p = pyaudio.PyAudio()

@@ -2,6 +2,7 @@
 Tests for AI Tool Definitions and Handlers.
 """
 import pytest
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -324,6 +325,52 @@ class TestToolPermissions:
         from jarvis import AudioLoop
         assert hasattr(AudioLoop, 'update_permissions')
         print("update_permissions method exists")
+
+    @pytest.mark.asyncio
+    async def test_stop_unblocks_queues_and_closes_streams(self):
+        """Test stop wakes blocked queue consumers and closes audio streams."""
+        from jarvis import AudioLoop
+
+        class DummyStream:
+            def __init__(self):
+                self.stopped = False
+                self.closed = False
+
+            def is_active(self):
+                return True
+
+            def stop_stream(self):
+                self.stopped = True
+
+            def close(self):
+                self.closed = True
+
+        loop = object.__new__(AudioLoop)
+        loop.stop_event = asyncio.Event()
+        loop.paused = True
+        loop.out_queue = asyncio.Queue()
+        loop.audio_in_queue = asyncio.Queue()
+        input_stream = DummyStream()
+        output_stream = DummyStream()
+        loop.audio_stream = input_stream
+        loop.output_audio_stream = output_stream
+        pending_future = asyncio.Future()
+        loop._pending_confirmations = {"confirmation": pending_future}
+
+        loop.stop()
+
+        assert loop.stop_event.is_set()
+        assert loop.paused is False
+        assert pending_future.done()
+        assert pending_future.result() is False
+        assert await loop.out_queue.get() is None
+        assert await loop.audio_in_queue.get() is None
+        assert input_stream.stopped is True
+        assert input_stream.closed is True
+        assert output_stream.stopped is True
+        assert output_stream.closed is True
+        assert loop.audio_stream is None
+        assert loop.output_audio_stream is None
 
 
 class TestAgentImports:

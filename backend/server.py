@@ -382,11 +382,34 @@ async def monitor_printers_loop():
 
 @sio.event
 async def stop_audio(sid):
-    global audio_loop
+    global audio_loop, loop_task
     if audio_loop:
-        audio_loop.stop() 
+        loop_to_stop = audio_loop
+        task_to_stop = loop_task
+
         print("Stopping Audio Loop")
-        audio_loop = None
+        loop_to_stop.stop()
+
+        if task_to_stop and not task_to_stop.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task_to_stop), timeout=5)
+            except asyncio.TimeoutError:
+                print("[SERVER] Audio loop did not stop in time. Cancelling task...")
+                task_to_stop.cancel()
+                try:
+                    await task_to_stop
+                except asyncio.CancelledError:
+                    pass
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                print(f"[SERVER] Audio loop stopped with error: {e}")
+
+        if audio_loop is loop_to_stop:
+            audio_loop = None
+        if loop_task is task_to_stop:
+            loop_task = None
+
         await sio.emit('status', {'msg': 'J.A.R.V.I.S Stopped'})
 
 @sio.event
