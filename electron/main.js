@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 
 // Use ANGLE D3D11 backend - more stable on Windows while keeping WebGL working
@@ -10,6 +11,23 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 let mainWindow;
 let pythonProcess;
+
+function resolvePythonExecutable() {
+    if (process.env.JARVIS_PYTHON) {
+        return process.env.JARVIS_PYTHON;
+    }
+
+    const projectRoot = path.join(__dirname, '..');
+    const localVenvPython = process.platform === 'win32'
+        ? path.join(projectRoot, 'venv', 'Scripts', 'python.exe')
+        : path.join(projectRoot, 'venv', 'bin', 'python');
+
+    if (fs.existsSync(localVenvPython)) {
+        return localVenvPython;
+    }
+
+    return process.platform === 'win32' ? 'python' : 'python3';
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -65,10 +83,11 @@ function createWindow() {
 
 function startPythonBackend() {
     const scriptPath = path.join(__dirname, '../backend/server.py');
+    const pythonExecutable = resolvePythonExecutable();
     console.log(`Starting Python backend: ${scriptPath}`);
+    console.log(`Using Python executable: ${pythonExecutable}`);
 
-    // Assuming 'python' is in PATH. In prod, this would be the executable.
-    pythonProcess = spawn('python', [scriptPath], {
+    pythonProcess = spawn(pythonExecutable, [scriptPath], {
         cwd: path.join(__dirname, '../backend'),
     });
 

@@ -158,7 +158,12 @@ Con el entorno Python activado, ejecuta:
 npm run dev
 ```
 
-Este comando arranca Vite, Electron y el backend Python automaticamente.
+Este comando arranca Vite, Electron y el backend Python automaticamente. Electron intenta usar primero `venv` local (`venv\Scripts\python.exe` en Windows). Si quieres forzar otro interprete, define `JARVIS_PYTHON` antes de arrancar:
+
+```powershell
+$env:JARVIS_PYTHON="C:\ruta\a\python.exe"
+npm run dev
+```
 
 ### Modo desarrollo con backend separado
 
