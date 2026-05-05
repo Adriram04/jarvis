@@ -19,45 +19,49 @@ const PrinterWindow = ({
 
     // Initial discovery on mount
     useEffect(() => {
-        if (socket) {
-            handleDiscover();
+        if (!socket) return undefined;
 
-            socket.on('printer_list', (list) => {
-                setPrinters(list);
-                setIsDiscovering(false);
-            });
+        handleDiscover();
 
-            socket.on('print_status_update', (data) => {
-                // Update specific printer status in list
-                setPrinters(prev => prev.map(p =>
-                    p.name === data.printer ? { ...p, status: data } : p
-                ));
-            });
+        const handlePrinterList = (list) => {
+            setPrinters(list);
+            setIsDiscovering(false);
+        };
 
-            socket.on('slicing_progress', (data) => {
-                setSlicingProgress({
-                    percent: data.percent,
-                    message: data.message,
-                    active: data.percent < 100
-                });
-            });
+        const handlePrintStatusUpdate = (data) => {
+            // Update specific printer status in list
+            setPrinters(prev => prev.map(p =>
+                p.name === data.printer ? { ...p, status: data } : p
+            ));
+        };
 
-            socket.on('print_result', (result) => {
-                // Reset slicing when print starts or fails
-                if (result.success) {
-                    setSlicingProgress({ percent: 100, message: 'Done', active: false });
-                } else {
-                    setSlicingProgress({ percent: 0, message: 'Failed', active: false });
-                }
+        const handleSlicingProgress = (data) => {
+            setSlicingProgress({
+                percent: data.percent,
+                message: data.message,
+                active: data.percent < 100
             });
-        }
-        return () => {
-            if (socket) {
-                socket.off('printer_list');
-                socket.off('print_status_update');
-                socket.off('slicing_progress');
-                socket.off('print_result');
+        };
+
+        const handlePrintResult = (result) => {
+            // Reset slicing when print starts or fails
+            if (result.success) {
+                setSlicingProgress({ percent: 100, message: 'Done', active: false });
+            } else {
+                setSlicingProgress({ percent: 0, message: 'Failed', active: false });
             }
+        };
+
+        socket.on('printer_list', handlePrinterList);
+        socket.on('print_status_update', handlePrintStatusUpdate);
+        socket.on('slicing_progress', handleSlicingProgress);
+        socket.on('print_result', handlePrintResult);
+
+        return () => {
+            socket.off('printer_list', handlePrinterList);
+            socket.off('print_status_update', handlePrintStatusUpdate);
+            socket.off('slicing_progress', handleSlicingProgress);
+            socket.off('print_result', handlePrintResult);
         };
     }, [socket]);
 
