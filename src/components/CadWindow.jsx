@@ -27,7 +27,7 @@ const LoadingCube = () => {
     );
 };
 
-const CadWindow = ({ data, thoughts, retryInfo = {}, onClose, socket }) => {
+const CadWindow = ({ data, thoughts, retryInfo = {}, onClose, onRequestPrint, socket }) => {
     // data format: { format: "stl", data: "base64..." }
     const [isIterating, setIsIterating] = useState(false);
     const [prompt, setPrompt] = useState("");
@@ -123,11 +123,7 @@ const CadWindow = ({ data, thoughts, retryInfo = {}, onClose, socket }) => {
                 </button>
                 <button
                     onClick={() => {
-                        // Trigger print from current available data if possible, or just open printer window
-                        // Since slicing requires backend file, we ideally emit an event or show UI
-                        // For now we'll rely on voice or tool window, but user requested button here.
-                        // Best approach: Open Printer Window + Auto-populate / Trigger
-                        if (socket) socket.emit('request_print_window');
+                        if (onRequestPrint) onRequestPrint();
                     }}
                     className="bg-green-500/20 hover:bg-green-500/50 text-green-400 text-xs px-2 py-1 rounded border border-green-500/30 backdrop-blur-sm flex items-center gap-1"
                 >

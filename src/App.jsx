@@ -470,17 +470,6 @@ function App() {
             setConfirmationRequest(data);
         });
 
-        // Handle Print Window Request (from CadWindow)
-        socket.on('request_print_window', () => {
-            setShowPrinterWindow(true);
-            const size = { w: 380, h: 380 };
-            const clamped = clampToViewport({ x: window.innerWidth / 2, y: window.innerHeight / 2 }, size);
-            setElementPositions(prev => ({
-                ...prev,
-                printer: clamped
-            }));
-        });
-
         // Kasa Devices
         socket.on('kasa_devices', (devices) => {
             console.log("Kasa Devices:", devices);
@@ -1340,6 +1329,17 @@ function App() {
         setShowPrinterWindow(!showPrinterWindow);
     };
 
+    const openPrinterWindow = () => {
+        setShowPrinterWindow(true);
+        const size = elementSizes.printer || { w: 380, h: 380 };
+        const clamped = clampToViewport({ x: window.innerWidth / 2, y: window.innerHeight / 2 }, size);
+        setElementPositions(prev => ({
+            ...prev,
+            printer: clamped
+        }));
+        bringToFront('printer');
+    };
+
 
 
     return (
@@ -1570,6 +1570,7 @@ function App() {
                                 thoughts={cadThoughts}
                                 retryInfo={cadRetryInfo}
                                 onClose={() => setShowCadWindow(false)}
+                                onRequestPrint={openPrinterWindow}
                                 socket={socket}
                             />
                         </div>
