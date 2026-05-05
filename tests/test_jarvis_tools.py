@@ -203,6 +203,102 @@ class TestFileOperations:
         assert (project_path / "docs" / "specs").is_dir()
         assert "created successfully" in loop.session.last_message
 
+    @pytest.mark.asyncio
+    async def test_handle_write_file_blocks_project_escape(self, tmp_path):
+        """Test handle_write_file rejects paths outside the project."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        project_path.mkdir(parents=True)
+        outside_path = project_path.parent / "outside.txt"
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        class DummySession:
+            async def send(self, input, end_of_turn):
+                self.last_message = input
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+        loop.session = DummySession()
+        loop.on_project_update = None
+
+        await loop.handle_write_file("../outside.txt", "secret")
+
+        assert not outside_path.exists()
+        assert "Path must stay inside the current project" in loop.session.last_message
+
+    @pytest.mark.asyncio
+    async def test_handle_read_file_uses_project_root(self, tmp_path):
+        """Test handle_read_file reads only from the current project."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        project_path.mkdir(parents=True)
+        safe_file = project_path / "notes.txt"
+        safe_file.write_text("project note", encoding="utf-8")
+        outside_file = project_path.parent / "outside.txt"
+        outside_file.write_text("outside secret", encoding="utf-8")
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        class DummySession:
+            async def send(self, input, end_of_turn):
+                self.last_message = input
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+        loop.session = DummySession()
+
+        await loop.handle_read_file("notes.txt")
+        assert "project note" in loop.session.last_message
+
+        await loop.handle_read_file("../outside.txt")
+        assert "outside secret" not in loop.session.last_message
+        assert "Path must stay inside the current project" in loop.session.last_message
+
+    @pytest.mark.asyncio
+    async def test_handle_read_directory_uses_project_root(self, tmp_path):
+        """Test handle_read_directory lists only project-rooted directories."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        docs_path = project_path / "docs"
+        docs_path.mkdir(parents=True)
+        (docs_path / "safe.txt").write_text("ok", encoding="utf-8")
+        outside_dir = project_path.parent / "outside"
+        outside_dir.mkdir()
+        (outside_dir / "secret.txt").write_text("secret", encoding="utf-8")
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        class DummySession:
+            async def send(self, input, end_of_turn):
+                self.last_message = input
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+        loop.session = DummySession()
+
+        await loop.handle_read_directory("docs")
+        assert "safe.txt" in loop.session.last_message
+
+        await loop.handle_read_directory("../outside")
+        assert "secret.txt" not in loop.session.last_message
+        assert "Path must stay inside the current project" in loop.session.last_message
+
 
 class TestLiveConnectConfig:
     """Test Gemini Live Connect configuration."""

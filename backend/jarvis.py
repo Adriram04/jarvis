@@ -552,30 +552,16 @@ class AudioLoop:
                 except Exception as e:
                     print(f"[JARVIS DEBUG] [ERR] Failed to notify auto-project: {e}")
         
-        # Force path to be relative to current project
-        # If absolute path is provided, we try to strip it or just ignore it and use basename
-        filename = os.path.basename(path)
-        
-        # If path contained subdirectories (e.g. "backend/server.py"), preserving that structure might be desired IF it's within the project.
-        # But for safety, and per user request to "always create the file in the project", 
-        # we will root it in the current project path.
-        
-        current_project_path = self.project_manager.get_current_project_path()
-        final_path = current_project_path / filename # Simple flat structure for now, or allow relative?
-        
-        # If the user specifically wanted a subfolder, they might have provided "sub/file.txt".
-        # Let's support relative paths if they don't start with /
-        if not os.path.isabs(path):
-             final_path = current_project_path / path
-        
-        print(f"[JARVIS DEBUG] [FS] Resolved path: '{final_path}'")
-
         try:
+            final_path = self._resolve_project_path(path)
+            print(f"[JARVIS DEBUG] [FS] Resolved path: '{final_path}'")
+
             # Ensure parent exists
-            os.makedirs(os.path.dirname(final_path), exist_ok=True)
+            final_path.parent.mkdir(parents=True, exist_ok=True)
             with open(final_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-            result = f"File '{final_path.name}' written successfully to project '{self.project_manager.current_project}'."
+            relative_path = final_path.relative_to(self.project_manager.get_current_project_path().resolve())
+            result = f"File '{relative_path}' written successfully to project '{self.project_manager.current_project}'."
         except Exception as e:
             result = f"Failed to write file '{path}': {str(e)}"
 
@@ -642,11 +628,16 @@ class AudioLoop:
     async def handle_read_directory(self, path):
         print(f"[JARVIS DEBUG] [FS] Reading directory: '{path}'")
         try:
-            if not os.path.exists(path):
-                result = f"Directory '{path}' does not exist."
+            final_path = self._resolve_project_path(path)
+            relative_path = final_path.relative_to(self.project_manager.get_current_project_path().resolve())
+
+            if not final_path.exists():
+                result = f"Directory '{relative_path}' does not exist."
+            elif not final_path.is_dir():
+                result = f"Path '{relative_path}' is not a directory."
             else:
-                items = os.listdir(path)
-                result = f"Contents of '{path}': {', '.join(items)}"
+                items = [item.name for item in final_path.iterdir()]
+                result = f"Contents of '{relative_path}': {', '.join(items)}"
         except Exception as e:
             result = f"Failed to read directory '{path}': {str(e)}"
 
@@ -659,12 +650,17 @@ class AudioLoop:
     async def handle_read_file(self, path):
         print(f"[JARVIS DEBUG] [FS] Reading file: '{path}'")
         try:
-            if not os.path.exists(path):
-                result = f"File '{path}' does not exist."
+            final_path = self._resolve_project_path(path)
+            relative_path = final_path.relative_to(self.project_manager.get_current_project_path().resolve())
+
+            if not final_path.exists():
+                result = f"File '{relative_path}' does not exist."
+            elif not final_path.is_file():
+                result = f"Path '{relative_path}' is not a file."
             else:
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(final_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                result = f"Content of '{path}':\n{content}"
+                result = f"Content of '{relative_path}':\n{content}"
         except Exception as e:
             result = f"Failed to read file '{path}': {str(e)}"
 
