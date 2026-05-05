@@ -1,40 +1,64 @@
-import face_recognition
-import numpy as np
-import cv2
+"""
+Legacy face-recognition smoke test updated for the current MediaPipe-based
+FaceAuthenticator implementation.
+"""
 import sys
+from pathlib import Path
 
-print(f"Numpy version: {np.__version__}")
-print(f"CV2 version: {cv2.__version__}")
+import numpy as np
+import pytest
+
+
+BACKEND_DIR = Path(__file__).parent / "backend"
+sys.path.insert(0, str(BACKEND_DIR))
 
 try:
-    print("Attempting to load image with face_recognition...")
-    # Create a dummy image if reference.jpg doesn't exist (but we know it does)
-    # Actually let's just make a dummy numpy array to test valid format
-    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
-    
-    print("Encoding dummy image...")
-    try:
-        enc = face_recognition.face_encodings(dummy_img)
-        print("Dummy encoding successful (empty result expected)")
-    except Exception as e:
-        print(f"Dummy encoding failed: {e}")
+    from authenticator import FaceAuthenticator
 
-    print("Loading actual reference.jpg using CV2...")
-    # image = face_recognition.load_image_file("backend/reference.jpg") # This uses PIL
-    img_bgr = cv2.imread("backend/reference.jpg")
-    if img_bgr is None:
-        raise ValueError("Failed to load image with cv2")
-    image = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    
-    # Force contiguous array and uint8 just to be safe
-    image = np.ascontiguousarray(image, dtype=np.uint8)
-    
-    print(f"Image loaded. Shape: {image.shape}, Dtype: {image.dtype}, Flags: {image.flags}")
-    
-    encodings = face_recognition.face_encodings(image)
-    print(f"Encodings found: {len(encodings)}")
+    HAS_AUTH = True
+    IMPORT_ERROR = ""
+except ImportError as exc:
+    FaceAuthenticator = None
+    HAS_AUTH = False
+    IMPORT_ERROR = str(exc)
 
-except Exception as e:
-    print(f"CRITICAL ERROR: {e}")
-    import traceback
-    traceback.print_exc()
+
+pytestmark = pytest.mark.skipif(
+    not HAS_AUTH,
+    reason=f"Face authentication dependencies not installed: {IMPORT_ERROR}",
+)
+
+
+def test_face_authenticator_imports_current_stack():
+    """The active face-auth stack uses MediaPipe, OpenCV, and NumPy."""
+    import cv2
+    import mediapipe
+
+    assert FaceAuthenticator is not None
+    assert cv2.__version__
+    assert mediapipe.__version__
+
+
+def test_face_authenticator_handles_missing_reference():
+    """A missing reference image should not crash initialization."""
+    auth = FaceAuthenticator(reference_image_path="missing_reference.jpg")
+
+    assert auth is not None
+    assert auth.reference_landmarks is None
+    assert auth.authenticated is False
+
+
+def test_blank_image_has_no_face_landmarks():
+    """Blank images should be accepted and return no detected face."""
+    auth = FaceAuthenticator(reference_image_path="missing_reference.jpg")
+    blank_image = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    assert auth._extract_landmarks(blank_image) is None
+
+
+def test_landmark_comparison_for_identical_vectors():
+    """Identical landmark vectors should authenticate as a match."""
+    auth = FaceAuthenticator(reference_image_path="missing_reference.jpg")
+    landmarks = np.random.rand(1404).astype(np.float32)
+
+    assert bool(auth._compare_landmarks(landmarks, landmarks)) is True
