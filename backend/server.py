@@ -61,7 +61,8 @@ audio_loop = None
 loop_task = None
 authenticator = None
 kasa_agent = KasaAgent()
-SETTINGS_FILE = "settings.json"
+SETTINGS_FILE = BACKEND_DIR / "settings.json"
+REFERENCE_IMAGE_FILE = BACKEND_DIR / "reference.jpg"
 
 DEFAULT_SETTINGS = {
     "face_auth_enabled": False, # Default OFF as requested
@@ -153,7 +154,7 @@ async def connect(sid, environ):
     # Initialize Authenticator if not already done
     if authenticator is None:
         authenticator = FaceAuthenticator(
-            reference_image_path="reference.jpg",
+            reference_image_path=str(REFERENCE_IMAGE_FILE),
             on_status_change=on_auth_status,
             on_frame=on_auth_frame
         )
