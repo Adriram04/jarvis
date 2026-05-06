@@ -109,6 +109,37 @@ def save_settings():
     except Exception as e:
         print(f"Error saving settings: {e}")
 
+def _printer_type_value(printer_type):
+    return printer_type.value if hasattr(printer_type, "value") else str(printer_type)
+
+def _build_printer_settings_config(name, host, printer, camera_url=None, api_key=None):
+    config = {
+        "name": name,
+        "host": host,
+        "port": printer.port,
+        "type": _printer_type_value(printer.printer_type),
+    }
+
+    if camera_url is not None:
+        config["camera_url"] = camera_url
+    elif getattr(printer, "camera_url", None) is not None:
+        config["camera_url"] = printer.camera_url
+
+    if api_key is not None:
+        config["api_key"] = api_key
+
+    return config
+
+def _upsert_printer_setting(printer_config):
+    printers = SETTINGS.setdefault("printers", [])
+    for index, existing in enumerate(printers):
+        if existing.get("host") == printer_config["host"]:
+            printers[index] = {**existing, **printer_config}
+            return "updated"
+
+    printers.append(printer_config)
+    return "added"
+
 # Load on startup
 load_settings()
 
@@ -783,49 +814,49 @@ async def add_printer(sid, data):
     try:
         # Add manually
         camera_url = data.get('camera_url')
-        printer = audio_loop.printer_agent.add_printer_manually(name, host, port=port, printer_type=ptype, camera_url=camera_url)
-        
-        # Save to settings
-        new_printer_config = {
-            "name": name,
-            "host": host,
-            "port": port,
-            "type": ptype,
-            "camera_url": camera_url
-        }
-        
-        # Check if already exists to avoid duplicates
-        exists = False
-        for p in SETTINGS.get("printers", []):
-            if p["host"] == host and p["port"] == port:
-                exists = True
-                break
-        
-        if not exists:
-            if "printers" not in SETTINGS:
-                SETTINGS["printers"] = []
-            SETTINGS["printers"].append(new_printer_config)
-            save_settings()
-            print(f"[SERVER] Saved printer {name} to settings.")
+        api_key = data.get('api_key')
+        printer = audio_loop.printer_agent.add_printer_manually(
+            name,
+            host,
+            port=port,
+            printer_type=ptype,
+            api_key=api_key,
+            camera_url=camera_url
+        )
         
         # Probe to confirm/correct type
         print(f"Probing {host} to confirm type...")
         # Try port 7125 (Moonraker) and 4408 (Fluidd/K1) 
-        ports_to_try = [80, 7125, 4408]
-        
-        actual_type = "unknown"
-        for port in ports_to_try:
-             found_type = await audio_loop.printer_agent._probe_printer_type(host, port)
-             if found_type.value != "unknown":
-                 actual_type = found_type
-                 # Update port if different
-                 if port != 80:
-                     printer.port = port
-                 break
-        
-        if actual_type != "unknown" and actual_type != printer.printer_type:
-             printer.printer_type = actual_type
-             print(f"Corrected type to {actual_type.value} on port {printer.port}")
+        ports_to_try = []
+        for candidate_port in [port, 80, 7125, 4408]:
+            if candidate_port not in ports_to_try:
+                ports_to_try.append(candidate_port)
+
+        actual_type = None
+        for probe_port in ports_to_try:
+            found_type = await audio_loop.printer_agent._probe_printer_type(host, probe_port)
+            if found_type.value != "unknown":
+                actual_type = found_type
+                # Update port if different
+                if probe_port != printer.port:
+                    printer.port = probe_port
+                break
+
+        if actual_type and actual_type != printer.printer_type:
+            printer.printer_type = actual_type
+            print(f"Corrected type to {actual_type.value} on port {printer.port}")
+
+        # Save only after probing so settings persist the final corrected port/type.
+        printer_config = _build_printer_settings_config(
+            name=name,
+            host=host,
+            printer=printer,
+            camera_url=camera_url,
+            api_key=api_key
+        )
+        action = _upsert_printer_setting(printer_config)
+        save_settings()
+        print(f"[SERVER] {action.capitalize()} printer {name} in settings: {host}:{printer.port} ({printer_config['type']})")
              
         # Refresh list for everyone
         printers = [p.to_dict() for p in audio_loop.printer_agent.printers.values()]

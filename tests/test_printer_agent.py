@@ -85,6 +85,76 @@ class TestPrinterDiscovery:
         assert printer.name == "Test Printer"
         print(f"Added printer: {printer.name}")
 
+    @pytest.mark.asyncio
+    async def test_server_add_printer_persists_corrected_probe_result(self, monkeypatch):
+        """Test server persists the final probed printer port/type."""
+        import server
+
+        saved_settings = []
+        emitted = []
+
+        class FakePrinterAgent:
+            def __init__(self):
+                self.printers = {}
+
+            def add_printer_manually(self, name, host, port=80, printer_type="octoprint", api_key=None, camera_url=None):
+                ptype = PrinterType(printer_type) if printer_type in [e.value for e in PrinterType] else PrinterType.UNKNOWN
+                printer = Printer(
+                    name=name,
+                    host=host,
+                    port=port,
+                    printer_type=ptype,
+                    api_key=api_key,
+                    camera_url=camera_url,
+                )
+                self.printers[host] = printer
+                return printer
+
+            async def _probe_printer_type(self, host, port):
+                return PrinterType.MOONRAKER if port == 7125 else PrinterType.UNKNOWN
+
+        class FakeAudioLoop:
+            def __init__(self):
+                self.printer_agent = FakePrinterAgent()
+
+        async def fake_emit(event, data=None, **kwargs):
+            emitted.append((event, data, kwargs))
+
+        monkeypatch.setattr(server, "audio_loop", FakeAudioLoop())
+        monkeypatch.setattr(server, "SETTINGS", {
+            "printers": [{
+                "name": "Old K1",
+                "host": "10.0.0.44",
+                "port": 80,
+                "type": "octoprint",
+                "camera_url": "http://10.0.0.44/cam",
+                "api_key": "existing-key",
+            }]
+        })
+        monkeypatch.setattr(server, "save_settings", lambda: saved_settings.append(server.SETTINGS.copy()))
+        monkeypatch.setattr(server.sio, "emit", fake_emit)
+
+        await server.add_printer("sid", {
+            "host": "10.0.0.44",
+            "name": "Creality K1",
+            "type": "octoprint",
+        })
+
+        saved_printers = server.SETTINGS["printers"]
+        assert len(saved_printers) == 1
+        assert saved_printers[0]["name"] == "Creality K1"
+        assert saved_printers[0]["host"] == "10.0.0.44"
+        assert saved_printers[0]["port"] == 7125
+        assert saved_printers[0]["type"] == "moonraker"
+        assert saved_printers[0]["camera_url"] == "http://10.0.0.44/cam"
+        assert saved_printers[0]["api_key"] == "existing-key"
+        assert len(saved_settings) == 1
+
+        printer_list_events = [data for event, data, _ in emitted if event == "printer_list"]
+        assert printer_list_events
+        assert printer_list_events[-1][0]["port"] == 7125
+        assert printer_list_events[-1][0]["printer_type"] == "moonraker"
+
 
 class TestPrinterWithSettings:
     """Test with printers from settings.json."""
