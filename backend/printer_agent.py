@@ -19,6 +19,8 @@ from enum import Enum
 import aiohttp
 from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
 
+DEFAULT_SLICER_TIMEOUT_SECONDS = 300
+
 
 class PrinterType(Enum):
     OCTOPRINT = "octoprint"
@@ -107,6 +109,7 @@ class PrinterAgent:
         self.profiles_dir = profiles_dir
         self._zeroconf: Optional[Zeroconf] = None
         self._error_tracker = set() # Track hosts with errors to prevent log spam
+        self.slicer_timeout_seconds = self._resolve_slicer_timeout_seconds()
         
         # Detect slicer path and profiles directory
         self.slicer_path = self._detect_slicer_path()
@@ -114,6 +117,19 @@ class PrinterAgent:
         
         # Ensure profiles directory exists
         os.makedirs(profiles_dir, exist_ok=True)
+
+    def _resolve_slicer_timeout_seconds(self) -> int:
+        raw_value = os.getenv("JARVIS_SLICER_TIMEOUT_SECONDS")
+        if not raw_value:
+            return DEFAULT_SLICER_TIMEOUT_SECONDS
+
+        try:
+            timeout = int(raw_value)
+        except ValueError:
+            print(f"[PRINTER] Warning: invalid JARVIS_SLICER_TIMEOUT_SECONDS='{raw_value}'. Using default.")
+            return DEFAULT_SLICER_TIMEOUT_SECONDS
+
+        return max(1, timeout)
     
     def _detect_orca_profiles_dir(self) -> Optional[str]:
         """Detect OrcaSlicer profiles directory."""
@@ -683,7 +699,8 @@ class PrinterAgent:
                     subprocess.run,
                     cmd,
                     capture_output=True,
-                    text=True
+                    text=True,
+                    timeout=self.slicer_timeout_seconds
                 )
                 
                 # Log slicer output for debugging
@@ -695,6 +712,11 @@ class PrinterAgent:
                 if progress_callback:
                     await progress_callback(90, "Finalizing...")
                 
+            except subprocess.TimeoutExpired:
+                print(f"[PRINTER] Slicing timeout ({self.slicer_timeout_seconds}s exceeded)")
+                if progress_callback:
+                    await progress_callback(100, "Slicing timed out")
+                return None
             except Exception as e:
                 print(f"[PRINTER] Subprocess run failed: {e}")
                 return None
@@ -735,7 +757,7 @@ class PrinterAgent:
                 return None
                 
         except subprocess.TimeoutExpired:
-            print("[PRINTER] Slicing timeout (5 min exceeded)")
+            print(f"[PRINTER] Slicing timeout ({self.slicer_timeout_seconds}s exceeded)")
             return None
         except Exception as e:
             print(f"[PRINTER] Slicing error: {e}")

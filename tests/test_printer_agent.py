@@ -4,6 +4,7 @@ Discovery only - no actual print jobs.
 """
 import pytest
 import asyncio
+import subprocess
 
 # Try to import the agent, skip all tests if dependencies missing
 try:
@@ -200,6 +201,72 @@ class TestSlicerProfiles:
         for key, path in profiles.items():
             if path:
                 print(f"  {key}: {path}")
+
+
+class TestSlicerTimeout:
+    """Test slicer subprocess timeout handling."""
+
+    def test_slicer_timeout_from_environment(self, monkeypatch, tmp_path):
+        """Test slicer timeout can be configured with an environment variable."""
+        monkeypatch.setenv("JARVIS_SLICER_TIMEOUT_SECONDS", "12")
+
+        agent = PrinterAgent(profiles_dir=str(tmp_path / "profiles"))
+
+        assert agent.slicer_timeout_seconds == 12
+
+    @pytest.mark.asyncio
+    async def test_slice_stl_passes_timeout_to_subprocess(self, monkeypatch, tmp_path):
+        """Test slice_stl passes the configured timeout to subprocess.run."""
+        agent = PrinterAgent(profiles_dir=str(tmp_path / "profiles"))
+        agent.slicer_path = "prusa-slicer-console"
+        agent.slicer_timeout_seconds = 7
+
+        stl_path = tmp_path / "model.stl"
+        output_path = tmp_path / "model.gcode"
+        stl_path.write_text("solid test\nendsolid test\n", encoding="utf-8")
+        captured = {}
+
+        def fake_run(cmd, capture_output, text, timeout):
+            captured["cmd"] = cmd
+            captured["timeout"] = timeout
+            return subprocess.CompletedProcess(cmd, 0, stdout="done", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = await agent.slice_stl(str(stl_path), output_path=str(output_path))
+
+        assert result == str(output_path)
+        assert captured["timeout"] == 7
+        assert captured["cmd"][0] == "prusa-slicer-console"
+
+    @pytest.mark.asyncio
+    async def test_slice_stl_returns_none_on_timeout(self, monkeypatch, tmp_path):
+        """Test slice_stl returns None when the slicer subprocess times out."""
+        agent = PrinterAgent(profiles_dir=str(tmp_path / "profiles"))
+        agent.slicer_path = "prusa-slicer-console"
+        agent.slicer_timeout_seconds = 1
+
+        stl_path = tmp_path / "model.stl"
+        output_path = tmp_path / "model.gcode"
+        stl_path.write_text("solid test\nendsolid test\n", encoding="utf-8")
+        progress_events = []
+
+        def fake_run(cmd, capture_output, text, timeout):
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+        async def progress_callback(percent, message):
+            progress_events.append((percent, message))
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = await agent.slice_stl(
+            str(stl_path),
+            output_path=str(output_path),
+            progress_callback=progress_callback,
+        )
+
+        assert result is None
+        assert progress_events[-1] == (100, "Slicing timed out")
 
 
 class TestPrinterType:

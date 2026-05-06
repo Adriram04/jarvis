@@ -140,6 +140,8 @@ Crea un archivo `.env` en la raiz del proyecto:
 GEMINI_API_KEY=tu_api_key_aqui
 # Opcional: limite de ejecucion para scripts CAD generados por IA.
 JARVIS_CAD_SCRIPT_TIMEOUT_SECONDS=30
+# Opcional: limite de ejecucion para OrcaSlicer/PrusaSlicer.
+JARVIS_SLICER_TIMEOUT_SECONDS=300
 ```
 
 Puedes crear una API key desde Google AI Studio:
