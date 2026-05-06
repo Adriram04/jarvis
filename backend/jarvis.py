@@ -1257,8 +1257,48 @@ class AudioLoop:
             if stream is not None and self.output_audio_stream is stream:
                 self._close_stream("output_audio_stream")
 
+    @staticmethod
+    def _camera_backend_candidates():
+        candidates = []
+
+        def add_backend(name):
+            backend = getattr(cv2, name, None)
+            if backend is not None:
+                candidates.append((name, backend))
+
+        if os.name == "nt":
+            add_backend("CAP_DSHOW")
+            add_backend("CAP_MSMF")
+        elif sys.platform == "darwin":
+            add_backend("CAP_AVFOUNDATION")
+        else:
+            add_backend("CAP_V4L2")
+
+        candidates.append(("default", None))
+        return candidates
+
+    async def _open_video_capture(self, index):
+        for backend_name, backend in self._camera_backend_candidates():
+            print(f"[JARVIS] Trying camera index {index} with backend {backend_name}...")
+            if backend is None:
+                cap = await asyncio.to_thread(cv2.VideoCapture, index)
+            else:
+                cap = await asyncio.to_thread(cv2.VideoCapture, index, backend)
+
+            if cap.isOpened():
+                print(f"[JARVIS] Camera {index} opened with backend {backend_name}.")
+                return cap
+
+            await asyncio.to_thread(cap.release)
+
+        return None
+
     async def get_frames(self):
-        cap = await asyncio.to_thread(cv2.VideoCapture, 0, cv2.CAP_AVFOUNDATION)
+        cap = await self._open_video_capture(0)
+        if cap is None:
+            print("[JARVIS] [ERR] Could not open camera for frame capture.")
+            return
+
         try:
             while not self.stop_event.is_set():
                 if self.paused:

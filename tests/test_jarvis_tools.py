@@ -129,7 +129,21 @@ class TestAudioLoopClass:
         
         for method in required_methods:
             assert hasattr(AudioLoop, method), f"Missing method: {method}"
-            print(f"  ✓ {method}")
+            print(f"  OK {method}")
+
+    def test_audioloop_windows_camera_backends_do_not_use_macos_backend(self, monkeypatch):
+        """Test Windows camera frame capture avoids macOS-only backend."""
+        import jarvis
+
+        monkeypatch.setattr(jarvis.os, 'name', 'nt', raising=False)
+        monkeypatch.setattr(jarvis.sys, 'platform', 'win32', raising=False)
+
+        backend_names = [name for name, _ in jarvis.AudioLoop._camera_backend_candidates()]
+        non_default_backends = backend_names[:-1]
+
+        assert backend_names[-1] == 'default'
+        assert 'CAP_AVFOUNDATION' not in non_default_backends
+        assert 'CAP_DSHOW' in non_default_backends or 'CAP_MSMF' in non_default_backends
 
 
 class TestFileOperations:

@@ -7,6 +7,7 @@ import os
 import base64
 import numpy as np
 import urllib.request
+import sys
 
 class FaceAuthenticator:
     # MediaPipe Face Landmarker model URL
@@ -157,33 +158,57 @@ class FaceAuthenticator:
         print("[AUTH] Stopping authentication loop...")
         self.running = False
 
-    def _run_cv_loop(self, loop):
-        def try_open_camera(index):
-            print(f"[AUTH] Trying to open camera with index {index}...")
-            cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
+    @staticmethod
+    def _camera_backend_candidates():
+        candidates = []
+
+        def add_backend(name):
+            backend = getattr(cv2, name, None)
+            if backend is not None:
+                candidates.append((name, backend))
+
+        if os.name == "nt":
+            add_backend("CAP_DSHOW")
+            add_backend("CAP_MSMF")
+        elif sys.platform == "darwin":
+            add_backend("CAP_AVFOUNDATION")
+        else:
+            add_backend("CAP_V4L2")
+
+        candidates.append(("default", None))
+        return candidates
+
+    def _try_open_camera(self, index):
+        for backend_name, backend in self._camera_backend_candidates():
+            print(f"[AUTH] Trying camera index {index} with backend {backend_name}...")
+            cap = cv2.VideoCapture(index) if backend is None else cv2.VideoCapture(index, backend)
             if not cap.isOpened():
-                print(f"[AUTH] [ERR] Could not open video device {index}.")
-                return None
-            
+                print(f"[AUTH] [ERR] Could not open video device {index} with backend {backend_name}.")
+                cap.release()
+                continue
+
             ret, frame = cap.read()
             if not ret:
-                 print(f"[AUTH] [ERR] Opened device {index} but failed to read first frame.")
-                 cap.release()
-                 return None
-            
-            print(f"[AUTH] [OK] Successfully opened and read from device {index}.")
+                print(f"[AUTH] [ERR] Opened device {index} with backend {backend_name} but failed to read first frame.")
+                cap.release()
+                continue
+
+            print(f"[AUTH] [OK] Successfully opened camera {index} with backend {backend_name}.")
             return cap
 
-        video_capture = try_open_camera(0)
+        return None
+
+    def _run_cv_loop(self, loop):
+        video_capture = self._try_open_camera(0)
         
         if video_capture is None:
-             print("[AUTH] Device 0 failed. Trying device 1...")
-             video_capture = try_open_camera(1)
+            print("[AUTH] Device 0 failed. Trying device 1...")
+            video_capture = self._try_open_camera(1)
 
         if video_capture is None:
-             print("[AUTH] [ERR] All camera attempts failed. Authentication cannot proceed.")
-             self.running = False
-             return
+            print("[AUTH] [ERR] All camera attempts failed. Authentication cannot proceed.")
+            self.running = False
+            return
 
         process_this_frame = True
         

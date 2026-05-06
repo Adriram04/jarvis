@@ -7,11 +7,13 @@ import numpy as np
 
 # Try to import the authenticator, skip all tests if dependencies missing
 try:
+    import authenticator as authenticator_module
     from authenticator import FaceAuthenticator
     HAS_AUTH = True
 except ImportError as e:
     HAS_AUTH = False
     IMPORT_ERROR = str(e)
+    authenticator_module = None
     FaceAuthenticator = None
 
 pytestmark = pytest.mark.skipif(not HAS_AUTH, reason=f"Auth dependencies not installed: {IMPORT_ERROR if not HAS_AUTH else ''}")
@@ -179,8 +181,33 @@ class TestCameraAccess:
         
         assert hasattr(auth, 'start_authentication_loop')
         assert hasattr(auth, 'stop')
+        assert hasattr(auth, '_camera_backend_candidates')
+        assert hasattr(auth, '_try_open_camera')
         assert hasattr(auth, '_run_cv_loop')
         print("All camera methods exist")
+
+    def test_windows_camera_backends_do_not_use_macos_backend(self, monkeypatch):
+        """Test Windows prefers Windows/OpenCV camera backends."""
+        monkeypatch.setattr(authenticator_module.os, 'name', 'nt', raising=False)
+        monkeypatch.setattr(authenticator_module.sys, 'platform', 'win32', raising=False)
+
+        backend_names = [name for name, _ in FaceAuthenticator._camera_backend_candidates()]
+        non_default_backends = backend_names[:-1]
+
+        assert backend_names[-1] == 'default'
+        assert 'CAP_AVFOUNDATION' not in non_default_backends
+        assert 'CAP_DSHOW' in non_default_backends or 'CAP_MSMF' in non_default_backends
+
+    def test_macos_camera_backend_prefers_avfoundation(self, monkeypatch):
+        """Test macOS still prefers AVFoundation when available."""
+        monkeypatch.setattr(authenticator_module.os, 'name', 'posix', raising=False)
+        monkeypatch.setattr(authenticator_module.sys, 'platform', 'darwin', raising=False)
+
+        backend_names = [name for name, _ in FaceAuthenticator._camera_backend_candidates()]
+
+        if getattr(authenticator_module.cv2, 'CAP_AVFOUNDATION', None) is not None:
+            assert backend_names[0] == 'CAP_AVFOUNDATION'
+        assert backend_names[-1] == 'default'
 
 
 class TestDependencies:
