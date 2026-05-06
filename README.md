@@ -328,6 +328,7 @@ jarvis/
 ```powershell
 npm run dev                         # Arranca la app en modo desarrollo
 npm run build                       # Genera build de frontend
+npm run wake-listener               # Listener de doble palmada con el venv local
 .\venv\Scripts\python.exe -m pytest # Ejecuta tests con venv
 python backend\server.py            # Arranca solo el backend
 python backend\capture_face.py      # Captura reference.jpg

@@ -134,6 +134,7 @@ function App() {
     const audioContextRef = useRef(null);
     const analyserRef = useRef(null);
     const sourceRef = useRef(null);
+    const micStreamRef = useRef(null);
     const animationFrameRef = useRef(null);
 
     // Video Refs
@@ -667,10 +668,12 @@ function App() {
 
     const startMicVisualizer = async (deviceId) => {
         stopMicVisualizer();
+        let stream = null;
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
+            stream = await navigator.mediaDevices.getUserMedia({
                 audio: { deviceId: { exact: deviceId } }
             });
+            micStreamRef.current = stream;
 
             audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
             analyserRef.current = audioContextRef.current.createAnalyser();
@@ -689,14 +692,47 @@ function App() {
 
             updateMicData();
         } catch (err) {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                if (micStreamRef.current === stream) {
+                    micStreamRef.current = null;
+                }
+            }
             console.error("Error accessing microphone:", err);
         }
     };
 
     const stopMicVisualizer = () => {
-        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-        if (sourceRef.current) sourceRef.current.disconnect();
-        if (audioContextRef.current) audioContextRef.current.close();
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+        }
+
+        if (sourceRef.current) {
+            try {
+                sourceRef.current.disconnect();
+            } catch (err) {
+                console.warn("Error disconnecting microphone visualizer source:", err);
+            }
+            sourceRef.current = null;
+        }
+
+        analyserRef.current = null;
+
+        if (audioContextRef.current) {
+            const context = audioContextRef.current;
+            audioContextRef.current = null;
+            if (context.state !== 'closed') {
+                context.close().catch(err => {
+                    console.warn("Error closing microphone audio context:", err);
+                });
+            }
+        }
+
+        if (micStreamRef.current) {
+            micStreamRef.current.getTracks().forEach(track => track.stop());
+            micStreamRef.current = null;
+        }
     };
 
     const startVideo = async () => {

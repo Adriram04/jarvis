@@ -6,17 +6,30 @@ param(
 )
 
 $listenerPath = Join-Path $ProjectRoot "wake_listener.py"
-$venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$venvPythonCandidates = @(
+    (Join-Path $ProjectRoot "venv\Scripts\python.exe"),
+    (Join-Path $ProjectRoot ".venv\Scripts\python.exe")
+)
 
 if (-not (Test-Path $listenerPath)) {
     Write-Error "wake_listener.py not found at $listenerPath"
     exit 1
 }
 
-if (Test-Path $venvPython) {
-    $python = $venvPython
+if (-not [string]::IsNullOrWhiteSpace($env:JARVIS_PYTHON)) {
+    $python = $env:JARVIS_PYTHON
 } else {
-    $python = "python"
+    $python = $null
+    foreach ($candidate in $venvPythonCandidates) {
+        if (Test-Path $candidate) {
+            $python = $candidate
+            break
+        }
+    }
+
+    if (-not $python) {
+        $python = "python"
+    }
 }
 
 Write-Host "[WakeListener] Starting with: $python $listenerPath --mode $Mode"
@@ -43,8 +56,9 @@ $defaultArgs = @(
     "--launch-visible"
 )
 
-if ([string]::IsNullOrWhiteSpace($ExtraArgs)) {
-    & $python $listenerPath @defaultArgs
-} else {
-    & $python $listenerPath @defaultArgs $ExtraArgs
+$extraArgList = @()
+if (-not [string]::IsNullOrWhiteSpace($ExtraArgs)) {
+    $extraArgList = @($ExtraArgs -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
+
+& $python $listenerPath @defaultArgs @extraArgList

@@ -6,7 +6,7 @@ when it detects **two claps** close together.
 ## Files added
 
 - `wake_listener.py`: Mic listener + clap detection + launcher
-- `scripts/start_wake_listener.ps1`: Starts listener with local `.venv` Python
+- `scripts/start_wake_listener.ps1`: Starts listener with `JARVIS_PYTHON`, local `venv`, local `.venv`, or PATH Python
 - `scripts/register_wake_listener_task.ps1`: Registers Windows auto-start task
 
 ## Run manually
@@ -53,19 +53,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\register_wake_listener_task.p
 If it does not trigger, lower threshold:
 
 ```powershell
-python .\wake_listener.py --mode dev --base-threshold-rms 3200
+.\venv\Scripts\python.exe .\wake_listener.py --mode dev --base-threshold-rms 3200
 ```
 
 If it triggers too easily, raise threshold:
 
 ```powershell
-python .\wake_listener.py --mode dev --base-threshold-rms 5200
+.\venv\Scripts\python.exe .\wake_listener.py --mode dev --base-threshold-rms 5200
 ```
 
 Useful debug mode:
 
 ```powershell
-python .\wake_listener.py --mode dev --verbose
+.\venv\Scripts\python.exe .\wake_listener.py --mode dev --verbose
 ```
 
 ## Troubleshooting (if claps do not trigger)

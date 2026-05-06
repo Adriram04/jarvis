@@ -7,8 +7,8 @@
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && npx electron .\"",
     "build": "vite build",
     "start": "npx electron .",
-    "wake-listener": "python wake_listener.py --mode dev",
-    "wake-listener:electron": "python wake_listener.py --mode electron"
+    "wake-listener": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\start_wake_listener.ps1 -Mode dev",
+    "wake-listener:electron": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\start_wake_listener.ps1 -Mode electron"
   },
   "keywords": [],
   "author": "Adrian Ramirez Gil",
