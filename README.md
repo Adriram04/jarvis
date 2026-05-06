@@ -138,6 +138,9 @@ Crea un archivo `.env` en la raiz del proyecto:
 
 ```env
 GEMINI_API_KEY=tu_api_key_aqui
+# Opcional: modelo principal y alternativas para generacion CAD.
+JARVIS_CAD_MODEL=gemini-2.5-flash
+JARVIS_CAD_FALLBACK_MODELS=gemini-2.5-flash-lite
 # Opcional: limite de ejecucion para scripts CAD generados por IA.
 JARVIS_CAD_SCRIPT_TIMEOUT_SECONDS=30
 # Opcional: limite de ejecucion para OrcaSlicer/PrusaSlicer.

@@ -50,7 +50,9 @@ class FaceAuthenticator:
             return
         
         try:
-            base_options = mp_python.BaseOptions(model_asset_path=self.MODEL_PATH)
+            with open(self.MODEL_PATH, "rb") as model_file:
+                model_buffer = model_file.read()
+            base_options = mp_python.BaseOptions(model_asset_buffer=model_buffer)
             options = vision.FaceLandmarkerOptions(
                 base_options=base_options,
                 output_face_blendshapes=False,

@@ -33,6 +33,16 @@ class TestCadAgentInit:
         assert agent.on_thought is not None
         assert agent.on_status is not None
 
+    def test_agent_uses_configurable_model_fallbacks(self, monkeypatch):
+        """Test CAD model fallback sequence can be configured by env vars."""
+        monkeypatch.setenv("JARVIS_CAD_MODEL", "gemini-primary")
+        monkeypatch.setenv("JARVIS_CAD_FALLBACK_MODELS", "gemini-lite, gemini-primary, gemini-backup")
+
+        agent = CadAgent()
+
+        assert agent.models == ["gemini-primary", "gemini-lite", "gemini-backup"]
+        assert agent.model == "gemini-primary"
+
 
 class TestCadScriptSafety:
     """Test local execution safeguards for generated CAD scripts."""
@@ -58,6 +68,55 @@ class TestCadScriptSafety:
 
         assert result.returncode == 124
         assert "timed out" in result.stderr
+
+    @pytest.mark.asyncio
+    async def test_generated_script_uses_ascii_output_filename_in_unicode_paths(self, tmp_path, monkeypatch):
+        """Generated scripts should not embed absolute paths with non-ASCII characters."""
+        import subprocess
+
+        agent = CadAgent()
+        work_dir = tmp_path / "Adrián AÑO"
+        work_dir.mkdir()
+        script_path = work_dir / "current_design.py"
+        output_stl = work_dir / "output_20260506_123456.stl"
+
+        async def fake_run(script_path_arg):
+            return subprocess.CompletedProcess([script_path_arg], 0, "", "")
+
+        monkeypatch.setattr(agent, "_run_generated_script", fake_run)
+
+        code = "# soporte con comentario acentuado á\nexport_stl(result_part, 'output.stl')\n"
+        await agent._write_and_run_generated_script(str(script_path), code, str(output_stl))
+
+        written = script_path.read_text(encoding="utf-8")
+        assert str(work_dir) not in written
+        assert "output_20260506_123456.stl" in written
+        assert "comentario acentuado á" in written
+
+    @pytest.mark.asyncio
+    async def test_rectangular_support_fallback_generates_stl(self, tmp_path):
+        """Fallback should generate a simple support when model output fails."""
+        agent = CadAgent()
+        script_path = tmp_path / "current_design.py"
+        output_stl = tmp_path / "output_test.stl"
+
+        result = await agent._try_parametric_fallback(
+            "Genera un soporte simple rectangular con cuatro agujeros",
+            str(script_path),
+            str(output_stl)
+        )
+
+        assert result is not None
+        assert result["format"] == "stl"
+        assert output_stl.exists()
+        assert output_stl.stat().st_size > 0
+
+    def test_hole_count_ignores_dimensions(self):
+        """Hole count parsing should not confuse dimensions with hole counts."""
+        agent = CadAgent()
+
+        assert agent._extract_hole_count("placa rectangular 80x40 con 4 agujeros") == 4
+        assert agent._extract_hole_count("rectangular support 80 by 40 with 2 holes") == 2
 
 
 class TestCadGeneration:
