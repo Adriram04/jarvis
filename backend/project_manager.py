@@ -48,6 +48,35 @@ class ProjectManager:
             return True, f"Switched to project '{safe_name}'."
         return False, f"Project '{safe_name}' does not exist."
 
+    def delete_project(self, name: str):
+        """Deletes a project directory by name."""
+        safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '-', '_')]).strip()
+        if not safe_name:
+            return False, "Project name cannot be empty."
+        if safe_name == "temp":
+            return False, "The temp project cannot be deleted directly."
+
+        projects_root = self.projects_dir.resolve()
+        project_path = (self.projects_dir / safe_name).resolve()
+
+        try:
+            project_path.relative_to(projects_root)
+        except ValueError:
+            return False, "Project path must stay inside the projects directory."
+
+        if not project_path.exists() or not project_path.is_dir():
+            return False, f"Project '{safe_name}' does not exist."
+
+        shutil.rmtree(project_path)
+        print(f"[ProjectManager] Deleted project: {safe_name}")
+
+        if self.current_project == safe_name:
+            self.current_project = "temp"
+            self.create_project("temp")
+            return True, f"Project '{safe_name}' deleted. Switched to 'temp'."
+
+        return True, f"Project '{safe_name}' deleted."
+
     def list_projects(self):
         """Returns a list of available projects."""
         return [d.name for d in self.projects_dir.iterdir() if d.is_dir()]

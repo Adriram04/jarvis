@@ -8,6 +8,8 @@ const TOOLS = [
     { id: 'write_file', label: 'Write File' },
     { id: 'read_directory', label: 'Read Directory' },
     { id: 'read_file', label: 'Read File' },
+    { id: 'delete_path', label: 'Delete File/Folder' },
+    { id: 'delete_project', label: 'Delete Project' },
     { id: 'create_project', label: 'Create Project' },
     { id: 'switch_project', label: 'Switch Project' },
     { id: 'list_projects', label: 'List Projects' },

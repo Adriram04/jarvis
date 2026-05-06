@@ -11,6 +11,7 @@ import PIL.Image
 import mss
 import argparse
 import math
+import shutil
 import struct
 import time
 
@@ -22,7 +23,7 @@ if sys.version_info < (3, 11, 0):
     asyncio.TaskGroup = taskgroup.TaskGroup
     asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
 
-from tools import create_directory_tool, tools_list
+from tools import create_directory_tool, delete_path_tool, delete_project_tool, tools_list
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -716,6 +717,34 @@ class AudioLoop:
         except Exception as e:
              print(f"[JARVIS DEBUG] [ERR] Failed to send fs result: {e}")
 
+    async def handle_delete_path(self, path):
+        print(f"[JARVIS DEBUG] [FS] Deleting path: '{path}'")
+        try:
+            final_path = self._resolve_project_path(path)
+            current_project_path = self.project_manager.get_current_project_path().resolve()
+            relative_path = final_path.relative_to(current_project_path)
+
+            if final_path == current_project_path:
+                result = "Refusing to delete the active project root. Use delete_project to delete a whole project."
+            elif not final_path.exists() and not final_path.is_symlink():
+                result = f"Path '{relative_path}' does not exist."
+            elif final_path.is_symlink() or final_path.is_file():
+                final_path.unlink()
+                result = f"File '{relative_path}' deleted successfully from project '{self.project_manager.current_project}'."
+            elif final_path.is_dir():
+                shutil.rmtree(final_path)
+                result = f"Directory '{relative_path}' deleted successfully from project '{self.project_manager.current_project}'."
+            else:
+                result = f"Path '{relative_path}' cannot be deleted because its type is not supported."
+        except Exception as e:
+            result = f"Failed to delete path '{path}': {str(e)}"
+
+        print(f"[JARVIS DEBUG] [FS] Result: {result}")
+        try:
+             await self.session.send(input=f"System Notification: {result}", end_of_turn=True)
+        except Exception as e:
+             print(f"[JARVIS DEBUG] [ERR] Failed to send fs result: {e}")
+
     async def handle_web_agent_request(self, prompt):
         print(f"[JARVIS DEBUG] [WEB] Web Agent Task: '{prompt}'")
         
@@ -818,7 +847,7 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "create_directory", "write_file", "read_directory", "read_file", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
+                            if fc.name in ["generate_cad", "run_web_agent", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
                                 
                                 # Check Permissions (Default to True if not set)
@@ -940,6 +969,15 @@ class AudioLoop:
                                     )
                                     function_responses.append(function_response)
 
+                                elif fc.name == "delete_path":
+                                    path = fc.args["path"]
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'delete_path' path='{path}'")
+                                    asyncio.create_task(self.handle_delete_path(path))
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": "Deleting path..."}
+                                    )
+                                    function_responses.append(function_response)
+
                                 elif fc.name == "create_project":
                                     name = fc.args["name"]
                                     print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'create_project' name='{name}'")
@@ -950,6 +988,19 @@ class AudioLoop:
                                         msg += f" Switched to '{name}'."
                                         if self.on_project_update:
                                             self.on_project_update(name)
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": msg}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "delete_project":
+                                    name = fc.args["name"]
+                                    previous_project = self.project_manager.current_project
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'delete_project' name='{name}'")
+                                    success, msg = self.project_manager.delete_project(name)
+                                    if success and self.project_manager.current_project != previous_project:
+                                        if self.on_project_update:
+                                            self.on_project_update(self.project_manager.current_project)
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": msg}
                                     )

@@ -73,6 +73,8 @@ DEFAULT_SETTINGS = {
         "write_file": True,
         "read_directory": True,
         "read_file": True,
+        "delete_path": True,
+        "delete_project": True,
         "create_project": True,
         "switch_project": True,
         "list_projects": True

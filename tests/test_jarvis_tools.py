@@ -47,6 +47,30 @@ class TestToolDefinitions:
         assert 'path' in create_directory_tool['parameters']['properties']
         assert create_directory_tool['parameters']['required'] == ['path']
         print(f"create_directory tool: {create_directory_tool['name']}")
+
+    def test_delete_path_tool_schema(self):
+        """Test delete_path tool has correct schema."""
+        from jarvis import delete_path_tool
+
+        assert delete_path_tool['name'] == 'delete_path'
+        assert 'description' in delete_path_tool
+        assert 'parameters' in delete_path_tool
+        assert delete_path_tool['parameters']['type'] == 'OBJECT'
+        assert 'path' in delete_path_tool['parameters']['properties']
+        assert delete_path_tool['parameters']['required'] == ['path']
+        print(f"delete_path tool: {delete_path_tool['name']}")
+
+    def test_delete_project_tool_schema(self):
+        """Test delete_project tool has correct schema."""
+        from jarvis import delete_project_tool
+
+        assert delete_project_tool['name'] == 'delete_project'
+        assert 'description' in delete_project_tool
+        assert 'parameters' in delete_project_tool
+        assert delete_project_tool['parameters']['type'] == 'OBJECT'
+        assert 'name' in delete_project_tool['parameters']['properties']
+        assert delete_project_tool['parameters']['required'] == ['name']
+        print(f"delete_project tool: {delete_project_tool['name']}")
     
     def test_print_stl_tool_schema(self):
         """Test print_stl tool has correct schema."""
@@ -168,6 +192,11 @@ class TestFileOperations:
         """Test handle_write_file exists."""
         from jarvis import AudioLoop
         assert hasattr(AudioLoop, 'handle_write_file')
+
+    def test_delete_path_method_exists(self):
+        """Test handle_delete_path exists."""
+        from jarvis import AudioLoop
+        assert hasattr(AudioLoop, 'handle_delete_path')
 
     def test_project_path_resolution_blocks_escape(self, tmp_path):
         """Test project-rooted paths cannot escape the current project."""
@@ -313,6 +342,123 @@ class TestFileOperations:
         await loop.handle_read_directory("../outside")
         assert "secret.txt" not in loop.session.last_message
         assert "Path must stay inside the current project" in loop.session.last_message
+
+    @pytest.mark.asyncio
+    async def test_handle_delete_path_deletes_file_and_folder(self, tmp_path):
+        """Test handle_delete_path removes files and folders in the current project."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        project_path.mkdir(parents=True)
+        file_path = project_path / "docs" / "old.txt"
+        file_path.parent.mkdir()
+        file_path.write_text("old", encoding="utf-8")
+        folder_path = project_path / "scratch"
+        folder_path.mkdir()
+        (folder_path / "temp.txt").write_text("temp", encoding="utf-8")
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        class DummySession:
+            async def send(self, input, end_of_turn):
+                self.last_message = input
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+        loop.session = DummySession()
+
+        await loop.handle_delete_path("docs/old.txt")
+        assert not file_path.exists()
+        assert "deleted successfully" in loop.session.last_message
+
+        await loop.handle_delete_path("scratch")
+        assert not folder_path.exists()
+        assert "deleted successfully" in loop.session.last_message
+
+    @pytest.mark.asyncio
+    async def test_handle_delete_path_blocks_escape_and_project_root(self, tmp_path):
+        """Test handle_delete_path cannot delete outside the project or the root itself."""
+        from jarvis import AudioLoop
+
+        project_path = tmp_path / "projects" / "Demo"
+        project_path.mkdir(parents=True)
+        outside_file = project_path.parent / "outside.txt"
+        outside_file.write_text("outside", encoding="utf-8")
+
+        class DummyProjectManager:
+            current_project = "Demo"
+
+            def get_current_project_path(self):
+                return project_path
+
+        class DummySession:
+            async def send(self, input, end_of_turn):
+                self.last_message = input
+
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = DummyProjectManager()
+        loop.session = DummySession()
+
+        await loop.handle_delete_path("../outside.txt")
+        assert outside_file.exists()
+        assert "Path must stay inside the current project" in loop.session.last_message
+
+        await loop.handle_delete_path(".")
+        assert project_path.exists()
+        assert "Refusing to delete the active project root" in loop.session.last_message
+
+
+class TestProjectDeletion:
+    """Test ProjectManager project deletion."""
+
+    def test_delete_project_removes_non_current_project(self, tmp_path):
+        """Test delete_project removes a named project."""
+        from project_manager import ProjectManager
+
+        manager = ProjectManager(str(tmp_path))
+        success, _ = manager.create_project("Demo")
+        assert success
+
+        project_path = manager.projects_dir / "Demo"
+        (project_path / "notes.txt").write_text("note", encoding="utf-8")
+
+        success, message = manager.delete_project("Demo")
+
+        assert success
+        assert "deleted" in message
+        assert not project_path.exists()
+        assert manager.current_project == "temp"
+
+    def test_delete_current_project_switches_to_temp(self, tmp_path):
+        """Test deleting the active project switches back to temp."""
+        from project_manager import ProjectManager
+
+        manager = ProjectManager(str(tmp_path))
+        manager.create_project("Demo")
+        manager.switch_project("Demo")
+
+        success, message = manager.delete_project("Demo")
+
+        assert success
+        assert "Switched to 'temp'" in message
+        assert manager.current_project == "temp"
+        assert (manager.projects_dir / "temp").is_dir()
+
+    def test_delete_project_refuses_temp(self, tmp_path):
+        """Test the temp project is not deleted directly."""
+        from project_manager import ProjectManager
+
+        manager = ProjectManager(str(tmp_path))
+
+        success, message = manager.delete_project("temp")
+
+        assert success is False
+        assert "cannot be deleted" in message
+        assert (manager.projects_dir / "temp").is_dir()
 
 
 class TestLiveConnectConfig:
