@@ -14,6 +14,8 @@ import threading
 import sys
 import os
 import json
+import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +42,44 @@ app_socketio = socketio.ASGIApp(sio, app)
 import signal
 
 # --- SHUTDOWN HANDLER ---
+CAMERA_QUERY_PHRASES = [
+    "que ves",
+    "que estas viendo",
+    "que estoy enseñando",
+    "que estoy ensenando",
+    "que tengo en la mano",
+    "que objeto",
+    "describe la imagen",
+    "describe lo que ves",
+    "describe la camara",
+    "identifica",
+    "camara",
+    "camera",
+    "webcam",
+    "what do you see",
+    "what am i holding",
+    "describe what you see",
+]
+
+CAMERA_FOLLOWUP_PHRASES = {"y ahora", "ahora", "ahora?", "y ahora?", "ahora mismo", "mira ahora"}
+
+def _normalize_text_for_match(text):
+    normalized = unicodedata.normalize("NFKD", text or "")
+    without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return without_accents.lower().strip()
+
+def _is_camera_question(text, loop=None):
+    normalized = _normalize_text_for_match(text)
+    if any(phrase in normalized for phrase in CAMERA_QUERY_PHRASES):
+        return True
+
+    if normalized in CAMERA_FOLLOWUP_PHRASES and loop:
+        last_camera_question_at = getattr(loop, "_last_camera_question_at", None)
+        if last_camera_question_at and (time.time() - last_camera_question_at) < 120:
+            return True
+
+    return False
+
 def signal_handler(sig, frame):
     print(f"\n[SERVER] Caught signal {sig}. Exiting gracefully...")
     # Clean up audio loop
@@ -69,6 +109,7 @@ DEFAULT_SETTINGS = {
     "tool_permissions": {
         "generate_cad": True,
         "run_web_agent": True,
+        "inspect_camera": False,
         "create_directory": True,
         "write_file": True,
         "read_directory": True,
@@ -524,17 +565,32 @@ async def user_input(sid, data):
         # Log User Input to Project History
         if audio_loop and audio_loop.project_manager:
             audio_loop.project_manager.log_chat("User", text)
-            
-        # Use the same 'send' method that worked for audio, as 'send_realtime_input' and 'send_client_content' seem unstable in this env
-        # INJECT VIDEO FRAME IF AVAILABLE (VAD-style logic for Text Input)
-        if audio_loop and audio_loop._latest_image_payload:
-            print(f"[SERVER DEBUG] Piggybacking video frame with text input.")
+
+        fresh_image = data.get('image')
+        if fresh_image:
+            print("[SERVER DEBUG] Received fresh webcam frame with text input.")
+            await audio_loop.send_frame(fresh_image)
+
+        if _is_camera_question(text, audio_loop):
+            print("[SERVER DEBUG] Handling typed camera question with direct vision inspection.")
+            camera_result = await audio_loop.inspect_camera_view(text)
+            await sio.emit('transcription', {'sender': 'JARVIS', 'text': camera_result})
+            if audio_loop.project_manager:
+                audio_loop.project_manager.log_chat("JARVIS", camera_result)
             try:
-                # Send frame first
-                await audio_loop.session.send(input=audio_loop._latest_image_payload, end_of_turn=False)
+                await audio_loop.session.send(
+                    input=(
+                        "System Notification: The user asked a camera/vision question. "
+                        "The app answered directly using the current webcam frame, so do not answer this again. "
+                        f"Question: {text}\nAnswer: {camera_result}"
+                    ),
+                    end_of_turn=False
+                )
             except Exception as e:
-                print(f"[SERVER DEBUG] Failed to send piggyback frame: {e}")
-                
+                print(f"[SERVER DEBUG] Failed to sync camera answer to live session: {e}")
+            print("[SERVER DEBUG] Camera analysis emitted directly to frontend.")
+            return
+
         await audio_loop.session.send(input=text, end_of_turn=True)
         print(f"[SERVER DEBUG] Message sent to model successfully.")
 
@@ -552,6 +608,11 @@ async def video_frame(sid, data):
         # We don't await this because we don't want to block the socket handler
         # But send_frame is async, so we create a task
         asyncio.create_task(audio_loop.send_frame(image_data))
+
+@sio.event
+async def video_stopped(sid):
+    if audio_loop:
+        audio_loop.clear_webcam_frame()
 
 @sio.event
 async def save_memory(sid, data):

@@ -36,6 +36,18 @@ class TestToolDefinitions:
         assert 'prompt' in run_web_agent['parameters']['properties']
         print(f"run_web_agent tool: {run_web_agent['name']}")
 
+    def test_inspect_camera_tool_schema(self):
+        """Test inspect_camera tool has correct schema."""
+        from jarvis import inspect_camera_tool
+
+        assert inspect_camera_tool['name'] == 'inspect_camera'
+        assert 'description' in inspect_camera_tool
+        assert 'parameters' in inspect_camera_tool
+        assert inspect_camera_tool['parameters']['type'] == 'OBJECT'
+        assert 'prompt' in inspect_camera_tool['parameters']['properties']
+        assert inspect_camera_tool['parameters']['required'] == ['prompt']
+        print(f"inspect_camera tool: {inspect_camera_tool['name']}")
+
     def test_create_directory_tool_schema(self):
         """Test create_directory tool has correct schema."""
         from jarvis import create_directory_tool
@@ -149,6 +161,10 @@ class TestAudioLoopClass:
             'update_permissions',
             'set_paused',
             'clear_audio_queue',
+            'send_latest_webcam_frame_to_model',
+            'inspect_camera_view',
+            'clear_webcam_frame',
+            'wait_for_fresh_webcam_frame',
         ]
         
         for method in required_methods:
@@ -168,6 +184,109 @@ class TestAudioLoopClass:
         assert backend_names[-1] == 'default'
         assert 'CAP_AVFOUNDATION' not in non_default_backends
         assert 'CAP_DSHOW' in non_default_backends or 'CAP_MSMF' in non_default_backends
+
+
+class TestVisionFlow:
+    """Test webcam frame buffering and forwarding."""
+
+    @pytest.mark.asyncio
+    async def test_send_frame_stores_webcam_blob(self):
+        """Test send_frame stores a realtime image blob for Gemini."""
+        from jarvis import AudioLoop
+
+        loop = object.__new__(AudioLoop)
+        loop._received_video_frames = 0
+        loop._latest_image_payload = None
+        loop._latest_image_blob = None
+        loop._latest_image_bytes = None
+        loop._latest_image_received_at = None
+
+        await loop.send_frame(b"fake-jpeg-bytes")
+
+        assert loop._received_video_frames == 1
+        assert loop._latest_image_payload["mime_type"] == "image/jpeg"
+        assert loop._latest_image_blob.mime_type == "image/jpeg"
+        assert loop._latest_image_blob.data == b"fake-jpeg-bytes"
+        assert loop._latest_image_bytes == b"fake-jpeg-bytes"
+
+    @pytest.mark.asyncio
+    async def test_send_latest_webcam_frame_uses_realtime_input(self):
+        """Test latest webcam frame is sent through the realtime media API."""
+        from google.genai import types
+        from jarvis import AudioLoop
+
+        class DummySession:
+            def __init__(self):
+                self.media = None
+
+            async def send_realtime_input(self, media):
+                self.media = media
+
+        loop = object.__new__(AudioLoop)
+        loop.session = DummySession()
+        loop._latest_image_blob = types.Blob(data=b"frame", mime_type="image/jpeg")
+        loop._sent_video_frames = 0
+
+        sent = await loop.send_latest_webcam_frame_to_model("test")
+
+        assert sent is True
+        assert loop._sent_video_frames == 1
+        assert loop.session.media.mime_type == "image/jpeg"
+        assert loop.session.media.data == b"frame"
+
+    @pytest.mark.asyncio
+    async def test_inspect_camera_view_reports_missing_frame(self):
+        """Test inspect_camera_view handles missing webcam frames."""
+        from jarvis import AudioLoop
+
+        loop = object.__new__(AudioLoop)
+        loop._latest_image_bytes = None
+        loop._latest_image_received_at = None
+
+        result = await loop.inspect_camera_view("What do you see?")
+
+        assert "No webcam frame" in result
+
+    @pytest.mark.asyncio
+    async def test_inspect_camera_view_uses_vision_model(self, monkeypatch):
+        """Test inspect_camera_view sends image and prompt to the vision model."""
+        import jarvis
+        from jarvis import AudioLoop
+
+        captured = {}
+
+        class DummyModels:
+            async def generate_content(self, model, contents, config):
+                captured["model"] = model
+                captured["contents"] = contents
+                captured["config"] = config
+
+                class Response:
+                    text = "A visible test object."
+
+                return Response()
+
+        class DummyAio:
+            models = DummyModels()
+
+        class DummyClient:
+            aio = DummyAio()
+
+        monkeypatch.setattr(jarvis, "client", DummyClient())
+        monkeypatch.setattr(jarvis, "VISION_MODEL", "test-vision-model")
+        monkeypatch.setattr(jarvis, "VISION_FALLBACK_MODELS", [])
+
+        loop = object.__new__(AudioLoop)
+        loop._latest_image_bytes = b"frame"
+        loop._latest_image_received_at = 1.0
+        monkeypatch.setattr(jarvis.time, "time", lambda: 2.5)
+
+        result = await loop.inspect_camera_view("Describe it")
+
+        assert result == "A visible test object."
+        assert captured["model"] == "test-vision-model"
+        assert captured["contents"].parts[0].inline_data.mime_type == "image/jpeg"
+        assert captured["contents"].parts[1].text
 
 
 class TestFileOperations:

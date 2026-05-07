@@ -25,6 +25,8 @@ if sys.version_info < (3, 11, 0):
 
 from tools import create_directory_tool, delete_path_tool, delete_project_tool, tools_list
 
+load_dotenv()
+
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 SEND_SAMPLE_RATE = 16000
@@ -32,9 +34,15 @@ RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+VISION_MODEL = os.getenv("JARVIS_VISION_MODEL", "gemini-2.5-flash")
+VISION_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv("JARVIS_VISION_FALLBACK_MODELS", "gemini-2.5-flash-lite").split(",")
+    if model.strip()
+]
+VISION_REQUEST_TIMEOUT = float(os.getenv("JARVIS_VISION_TIMEOUT_SECONDS", "20"))
 DEFAULT_MODE = "camera"
 
-load_dotenv()
 client = genai.Client(http_options={"api_version": "v1beta"}, api_key=os.getenv("GEMINI_API_KEY"))
 
 # Function definitions
@@ -62,6 +70,25 @@ run_web_agent = {
         "required": ["prompt"]
     },
     "behavior": "NON_BLOCKING"
+}
+
+inspect_camera_tool = {
+    "name": "inspect_camera",
+    "description": (
+        "Analyzes the latest webcam frame. Always use this tool before answering "
+        "questions about what Jarvis sees, visible objects, the camera view, images, "
+        "or anything the user is showing to the webcam. Base the answer only on the tool result."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "prompt": {
+                "type": "STRING",
+                "description": "The user's visual question or the specific thing to identify/describe."
+            }
+        },
+        "required": ["prompt"]
+    }
 }
 
 create_project_tool = {
@@ -181,7 +208,7 @@ iterate_cad_tool = {
     "behavior": "NON_BLOCKING"
 }
 
-tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, iterate_cad_tool] + tools_list[0]['function_declarations'][1:]}]
+tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, iterate_cad_tool] + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
 config = types.LiveConnectConfig(
@@ -191,6 +218,12 @@ config = types.LiveConnectConfig(
     input_audio_transcription={},
     system_instruction="Your name is Jarvis, which stands for Just-in-Time Autonomous Reasoning, Vision & Integration System. "
         "You have a witty and charming personality. "
+        "When webcam frames are provided as visual input, treat them as your current camera view. "
+        "If the user asks what you see, describe the latest provided webcam frame instead of claiming you have no camera. "
+        "If no webcam frame has been provided yet, say that you do not currently have a camera frame available. "
+        "For camera or image questions, call inspect_camera first and base your answer only on that result. "
+        "This includes Spanish requests like 'que ves', 'que estas viendo', 'que es este objeto', or 'describe la imagen'. "
+        "Do not invent visual details that are not in the camera analysis. "
         "Your creator is Adrián, and you address him as 'Sir'. "
         "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
         "You have a fun personality.",
@@ -269,6 +302,13 @@ class AudioLoop:
 
         # Video buffering state
         self._latest_image_payload = None
+        self._latest_image_blob = None
+        self._latest_image_bytes = None
+        self._latest_image_received_at = None
+        self._new_image_event = asyncio.Event()
+        self._received_video_frames = 0
+        self._sent_video_frames = 0
+        self._last_camera_question_at = None
         # VAD State
         self._is_speaking = False
         self._silence_start_time = None
@@ -370,21 +410,147 @@ class AudioLoop:
             print(f"[JARVIS DEBUG] [ERR] Failed to clear audio queue: {e}")
 
     async def send_frame(self, frame_data):
-        # Update the latest frame payload
-        if isinstance(frame_data, bytes):
-            b64_data = base64.b64encode(frame_data).decode('utf-8')
+        # Update the latest frame payload received from the frontend webcam.
+        if isinstance(frame_data, (bytes, bytearray)):
+            image_bytes = bytes(frame_data)
+        elif isinstance(frame_data, str):
+            raw_data = frame_data.split(",", 1)[1] if "," in frame_data else frame_data
+            image_bytes = base64.b64decode(raw_data)
         else:
-            b64_data = frame_data 
+            print(f"[JARVIS DEBUG] [VISION] Unsupported frame type: {type(frame_data)}")
+            return
 
-        # Store as the designated "next frame to send"
+        b64_data = base64.b64encode(image_bytes).decode('ascii')
         self._latest_image_payload = {"mime_type": "image/jpeg", "data": b64_data}
-        # No event signal needed - listen_audio pulls it
+        self._latest_image_blob = types.Blob(data=image_bytes, mime_type="image/jpeg")
+        self._latest_image_bytes = image_bytes
+        self._latest_image_received_at = time.time()
+        new_image_event = getattr(self, "_new_image_event", None)
+        if new_image_event:
+            new_image_event.set()
+
+        self._received_video_frames += 1
+        if self._received_video_frames == 1 or self._received_video_frames % 60 == 0:
+            print(f"[JARVIS DEBUG] [VISION] Received webcam frame #{self._received_video_frames} ({len(image_bytes)} bytes).")
+
+    async def send_latest_webcam_frame_to_model(self, reason="manual"):
+        if not self.session or not self._latest_image_blob:
+            return False
+
+        await self.session.send_realtime_input(media=self._latest_image_blob)
+        self._sent_video_frames += 1
+        print(f"[JARVIS DEBUG] [VISION] Sent webcam frame #{self._sent_video_frames} to Gemini ({reason}).")
+        return True
+
+    def clear_webcam_frame(self):
+        self._latest_image_payload = None
+        self._latest_image_blob = None
+        self._latest_image_bytes = None
+        self._latest_image_received_at = None
+        new_image_event = getattr(self, "_new_image_event", None)
+        if new_image_event:
+            new_image_event.clear()
+        print("[JARVIS DEBUG] [VISION] Cleared latest webcam frame.")
+
+    def _vision_model_candidates(self):
+        candidates = [VISION_MODEL, *VISION_FALLBACK_MODELS]
+        seen = set()
+        unique_candidates = []
+        for model in candidates:
+            if model and model not in seen:
+                unique_candidates.append(model)
+                seen.add(model)
+        return unique_candidates
+
+    async def wait_for_fresh_webcam_frame(self, max_age=0.35, timeout=0.8):
+        if self._latest_image_received_at and time.time() - self._latest_image_received_at <= max_age:
+            return True
+
+        new_image_event = getattr(self, "_new_image_event", None)
+        if not new_image_event:
+            return False
+
+        new_image_event.clear()
+        try:
+            await asyncio.wait_for(new_image_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+
+        return bool(self._latest_image_bytes)
+
+    async def inspect_camera_view(self, prompt):
+        self._last_camera_question_at = time.time()
+        await self.wait_for_fresh_webcam_frame()
+
+        if not self._latest_image_bytes:
+            return "No webcam frame is currently available. Ask the user to turn on the camera and wait a moment."
+
+        image_bytes = self._latest_image_bytes
+        frame_age = time.time() - self._latest_image_received_at if self._latest_image_received_at else None
+        age_note = f"The webcam frame is {frame_age:.1f} seconds old." if frame_age is not None else ""
+        visual_prompt = (
+            "Analyze this webcam frame carefully and answer the user's visual question. "
+            "Respond in Spanish. "
+            "Only describe objects and details that are visible in the image. "
+            "If you are uncertain, say so clearly instead of guessing. "
+            f"{age_note}\n\n"
+            f"User visual question: {prompt}"
+        )
+
+        last_error = None
+        for model in self._vision_model_candidates():
+            try:
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=model,
+                        contents=types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                                types.Part(text=visual_prompt),
+                            ],
+                        ),
+                        config=types.GenerateContentConfig(
+                            temperature=0.0,
+                            top_p=0.7,
+                        ),
+                    ),
+                    timeout=VISION_REQUEST_TIMEOUT,
+                )
+                result = (getattr(response, "text", "") or "").strip()
+                if not result:
+                    result = "The vision model did not return a description for the current frame."
+                print(f"[JARVIS DEBUG] [VISION] Camera inspection result ({model}): {result[:300]}")
+                return result
+            except asyncio.TimeoutError as e:
+                last_error = f"{model} timed out after {VISION_REQUEST_TIMEOUT:.0f}s"
+                print(f"[JARVIS DEBUG] [VISION] Camera inspection timed out with {model}.")
+                break
+            except Exception as e:
+                last_error = e
+                print(f"[JARVIS DEBUG] [VISION] Camera inspection failed with {model}: {e}")
+
+        return f"Failed to inspect the current camera frame: {last_error}"
 
     async def send_realtime(self):
         while not self.stop_event.is_set():
             msg = await self.out_queue.get()
             if msg is None:
                 break
+
+            if isinstance(msg, types.Blob):
+                await self.session.send_realtime_input(media=msg)
+                continue
+
+            if isinstance(msg, dict) and "data" in msg and "mime_type" in msg:
+                mime_type = msg["mime_type"]
+                if mime_type == "audio/pcm":
+                    mime_type = f"audio/pcm;rate={SEND_SAMPLE_RATE}"
+                await self.session.send_realtime_input(
+                    media=types.Blob(data=msg["data"], mime_type=mime_type)
+                )
+                continue
+
             await self.session.send(input=msg, end_of_turn=False)
 
     async def listen_audio(self):
@@ -488,8 +654,8 @@ class AudioLoop:
                             print(f"[JARVIS DEBUG] [VAD] Speech Detected (RMS: {rms}). Sending Video Frame.")
                             
                             # Send ONE frame
-                            if self._latest_image_payload and self.out_queue:
-                                await self.out_queue.put(self._latest_image_payload)
+                            if self._latest_image_blob:
+                                await self.send_latest_webcam_frame_to_model("voice activity")
                             else:
                                 print(f"[JARVIS DEBUG] [VAD] No video frame available to send.")
 
@@ -847,7 +1013,7 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
+                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
                                 
                                 # Check Permissions (Default to True if not set)
@@ -930,6 +1096,17 @@ class AudioLoop:
                                     print(f"[JARVIS DEBUG] [RESPONSE] Sending function response: {function_response}")
                                     function_responses.append(function_response)
 
+
+                                elif fc.name == "inspect_camera":
+                                    prompt = fc.args.get("prompt", "Describe what is visible in the current webcam frame.")
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'inspect_camera' prompt='{prompt}'")
+                                    result_text = await self.inspect_camera_view(prompt)
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id,
+                                        name=fc.name,
+                                        response={"result": result_text}
+                                    )
+                                    function_responses.append(function_response)
 
 
                                 elif fc.name == "write_file":

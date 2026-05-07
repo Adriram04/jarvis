@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 const TOOLS = [
     { id: 'generate_cad', label: 'Generate CAD' },
     { id: 'run_web_agent', label: 'Web Agent' },
+    { id: 'inspect_camera', label: 'Inspect Camera' },
     { id: 'create_directory', label: 'Create Folder' },
     { id: 'write_file', label: 'Write File' },
     { id: 'read_directory', label: 'Read Directory' },

@@ -145,8 +145,11 @@ function App() {
     const lastFrameTimeRef = useRef(0);
     const frameCountRef = useRef(0);
     const lastVideoTimeRef = useRef(-1);
+    const sentVideoFramesRef = useRef(0);
 
     // Ref to track video state for the loop (avoids closure staleness)
+    const isConnectedRef = useRef(isConnected);
+    const socketConnectedRef = useRef(socketConnected);
     const isVideoOnRef = useRef(false);
     const isModularModeRef = useRef(false);
     const elementPositionsRef = useRef(elementPositions);
@@ -288,6 +291,14 @@ function App() {
 
     // Ref to track if model has been auto-connected (prevents duplicate connections)
     const hasAutoConnectedRef = useRef(false);
+
+    useEffect(() => {
+        isConnectedRef.current = isConnected;
+    }, [isConnected]);
+
+    useEffect(() => {
+        socketConnectedRef.current = socketConnected;
+    }, [socketConnected]);
 
     // Auto-Connect Model on Start (Only after Auth and devices loaded)
     useEffect(() => {
@@ -801,8 +812,9 @@ function App() {
         ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
         // 2. Send Frame to Backend (Throttled & Resized)
-        // Only send if connected
-        if (isConnected) {
+        // Only send if the app power and socket are both connected. Use refs so
+        // the long-running camera loop does not keep a stale React state value.
+        if (isConnectedRef.current && socketConnectedRef.current) {
             // Simple throttle: every 5th frame roughly
             if (frameCountRef.current % 5 === 0) {
 
@@ -817,6 +829,10 @@ function App() {
                     transCanvas.toBlob((blob) => {
                         if (blob) {
                             socket.emit('video_frame', { image: blob });
+                            sentVideoFramesRef.current++;
+                            if (sentVideoFramesRef.current === 1 || sentVideoFramesRef.current % 60 === 0) {
+                                console.log(`[Vision] Sent webcam frame #${sentVideoFramesRef.current} (${blob.size} bytes)`);
+                            }
                         }
                     }, 'image/jpeg', 0.6); // Slightly higher compression for speed
                 }
@@ -1079,9 +1095,34 @@ function App() {
             videoRef.current.srcObject.getTracks().forEach(track => track.stop());
             videoRef.current.srcObject = null;
         }
+        if (socket.connected) {
+            socket.emit('video_stopped');
+        }
+        sentVideoFramesRef.current = 0;
         setIsVideoOn(false);
         isVideoOnRef.current = false; // Update ref
         setFps(0);
+    };
+
+    const captureCurrentVideoFrame = () => {
+        return new Promise((resolve) => {
+            if (!isVideoOnRef.current || !videoRef.current || videoRef.current.readyState < 2) {
+                resolve(null);
+                return;
+            }
+
+            let transCanvas = transmissionCanvasRef.current;
+            if (!transCanvas) {
+                transCanvas = document.createElement('canvas');
+                transCanvas.width = 640;
+                transCanvas.height = 360;
+                transmissionCanvasRef.current = transCanvas;
+            }
+
+            const transCtx = transCanvas.getContext('2d');
+            transCtx.drawImage(videoRef.current, 0, 0, transCanvas.width, transCanvas.height);
+            transCanvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.72);
+        });
     };
 
     const toggleVideo = () => {
@@ -1121,11 +1162,20 @@ function App() {
         }
     };
 
-    const handleSend = (e) => {
+    const handleSend = async (e) => {
         if (e.key === 'Enter' && inputValue.trim()) {
-            socket.emit('user_input', { text: inputValue });
-            addMessage('You', inputValue);
+            const text = inputValue.trim();
             setInputValue('');
+            addMessage('You', text);
+
+            const payload = { text };
+            const freshFrame = await captureCurrentVideoFrame();
+            if (freshFrame) {
+                payload.image = freshFrame;
+                console.log(`[Vision] Attached fresh frame to text input (${freshFrame.size} bytes)`);
+            }
+
+            socket.emit('user_input', payload);
         }
     };
 
