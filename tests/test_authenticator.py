@@ -48,43 +48,50 @@ class TestAuthenticatorInit:
         assert auth.on_frame is not None
 
 
-class TestMediaPipeModel:
-    """Test MediaPipe Face Landmarker model."""
+class TestFaceIdentityModels:
+    """Test OpenCV face detector/recognizer models."""
     
-    def test_model_path_defined(self):
-        """Test that model path is defined."""
-        assert hasattr(FaceAuthenticator, 'MODEL_PATH')
-        print(f"Model path: {FaceAuthenticator.MODEL_PATH}")
+    def test_model_paths_defined(self):
+        """Test that model paths are defined."""
+        assert hasattr(FaceAuthenticator, 'DETECTOR_MODEL_PATH')
+        assert hasattr(FaceAuthenticator, 'RECOGNIZER_MODEL_PATH')
+        print(f"Detector model path: {FaceAuthenticator.DETECTOR_MODEL_PATH}")
+        print(f"Recognizer model path: {FaceAuthenticator.RECOGNIZER_MODEL_PATH}")
     
-    def test_model_download_url(self):
-        """Test that model URL is defined."""
-        assert hasattr(FaceAuthenticator, 'MODEL_URL')
-        print(f"Model URL: {FaceAuthenticator.MODEL_URL}")
+    def test_model_download_urls(self):
+        """Test that model URLs are defined."""
+        assert hasattr(FaceAuthenticator, 'DETECTOR_MODEL_URL')
+        assert hasattr(FaceAuthenticator, 'RECOGNIZER_MODEL_URL')
+        print(f"Detector model URL: {FaceAuthenticator.DETECTOR_MODEL_URL}")
+        print(f"Recognizer model URL: {FaceAuthenticator.RECOGNIZER_MODEL_URL}")
     
     def test_ensure_model(self):
         """Test model download/verification."""
         auth = FaceAuthenticator()
         auth._ensure_model()
         
-        model_path = FaceAuthenticator.MODEL_PATH
-        if os.path.exists(model_path):
-            print(f"Model exists at: {model_path}")
-            print(f"Model size: {os.path.getsize(model_path)} bytes")
-        else:
-            print("Model not downloaded (may require internet)")
+        for model_path in [
+            FaceAuthenticator.DETECTOR_MODEL_PATH,
+            FaceAuthenticator.RECOGNIZER_MODEL_PATH,
+        ]:
+            if os.path.exists(model_path):
+                print(f"Model exists at: {model_path}")
+                print(f"Model size: {os.path.getsize(model_path)} bytes")
+            else:
+                print(f"Model not downloaded: {model_path} (may require internet)")
 
 
-class TestLandmarkExtraction:
-    """Test face landmark extraction."""
+class TestFaceEmbeddingExtraction:
+    """Test face identity embedding extraction."""
     
     @pytest.fixture
     def auth(self):
-        """Create an authenticated FaceAuthenticator."""
+        """Create a FaceAuthenticator."""
         a = FaceAuthenticator()
         try:
-            a._init_landmarker()
+            a._init_face_recognition()
         except Exception as e:
-            pytest.skip(f"Could not initialize landmarker: {e}")
+            pytest.skip(f"Could not initialize face recognizer: {e}")
         return a
     
     def test_extract_from_blank_image(self, auth):
@@ -92,58 +99,72 @@ class TestLandmarkExtraction:
         # Create a blank image
         blank_image = np.zeros((480, 640, 3), dtype=np.uint8)
         
-        landmarks = auth._extract_landmarks(blank_image)
+        embedding = auth._extract_face_embedding(blank_image)
         
         # Blank image should have no face
-        assert landmarks is None
+        assert embedding is None
         print("No face detected in blank image (correct)")
     
-    def test_extract_landmarks_format(self, auth):
-        """Test that landmarks have correct format when detected."""
+    def test_extract_embedding_callable(self, auth):
+        """Test that embedding extraction is callable."""
         # This would require a real face image
         # For now, just verify the method exists and is callable
-        assert callable(auth._extract_landmarks)
+        assert callable(auth._extract_face_embedding)
 
 
-class TestLandmarkComparison:
-    """Test face landmark comparison."""
+class TestEmbeddingComparison:
+    """Test face identity embedding comparison."""
     
-    def test_compare_identical_landmarks(self):
-        """Test comparing identical landmarks."""
+    def test_compare_identical_embeddings(self):
+        """Test comparing identical embeddings."""
         auth = FaceAuthenticator()
         
-        # Create mock landmarks (468 points * 3 coords = 1404 values)
-        landmarks = np.random.rand(1404).astype(np.float32)
+        embedding = np.random.default_rng(0).normal(size=128).astype(np.float32)
         
-        result = auth._compare_landmarks(landmarks, landmarks)
+        result = auth._compare_embeddings(embedding, embedding)
         assert result == True
-        print("Identical landmarks comparison: True (correct)")
+        print("Identical embedding comparison: True (correct)")
     
-    def test_compare_different_landmarks(self):
-        """Test comparing completely different landmarks."""
+    def test_compare_orthogonal_embeddings(self):
+        """Test comparing clearly different embeddings."""
         auth = FaceAuthenticator()
         
-        landmarks1 = np.random.rand(1404).astype(np.float32)
-        landmarks2 = np.random.rand(1404).astype(np.float32)
+        embedding1 = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        embedding2 = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         
-        result = auth._compare_landmarks(landmarks1, landmarks2)
-        # Random vectors should likely be different
-        print(f"Random landmarks comparison: {result}")
+        result = auth._compare_embeddings(embedding1, embedding2)
+        assert result == False
+        print("Orthogonal embedding comparison: False (correct)")
     
     def test_compare_with_threshold(self):
         """Test comparison with different thresholds."""
         auth = FaceAuthenticator()
         
-        landmarks1 = np.ones(1404, dtype=np.float32)
-        landmarks2 = np.ones(1404, dtype=np.float32) * 0.99  # Very similar
+        embedding1 = np.array([1.0, 0.0], dtype=np.float32)
+        embedding2 = np.array([0.5, np.sqrt(0.75)], dtype=np.float32)
         
-        # Should pass with high threshold
-        result_high = auth._compare_landmarks(landmarks1, landmarks2, threshold=0.5)
-        print(f"High threshold (0.5) result: {result_high}")
+        result_low = auth._compare_embeddings(embedding1, embedding2, threshold=0.4)
+        assert result_low == True
+        print(f"Low threshold (0.4) result: {result_low}")
         
-        # May fail with low threshold
-        result_low = auth._compare_landmarks(landmarks1, landmarks2, threshold=0.001)
-        print(f"Low threshold (0.001) result: {result_low}")
+        result_high = auth._compare_embeddings(embedding1, embedding2, threshold=0.6)
+        assert result_high == False
+        print(f"High threshold (0.6) result: {result_high}")
+
+    def test_reset_authentication_requires_fresh_match(self):
+        """Test reset_authentication clears authenticated/running state."""
+        auth = FaceAuthenticator()
+        auth.authenticated = True
+        auth.running = True
+        auth.reference_embedding = np.ones(10, dtype=np.float32)
+        auth.reference_landmarks = np.ones(10, dtype=np.float32)
+
+        auth.reset_authentication()
+
+        assert auth.authenticated is False
+        assert auth.running is False
+        assert auth.reference_embedding is not None
+        assert auth.reference_landmarks is not None
 
 
 class TestReferenceImage:
@@ -213,18 +234,17 @@ class TestCameraAccess:
 class TestDependencies:
     """Test required dependencies."""
     
-    def test_mediapipe_import(self):
-        """Test MediaPipe is installed."""
-        try:
-            import mediapipe
-            print(f"MediaPipe version: {mediapipe.__version__}")
-        except ImportError:
-            pytest.skip("MediaPipe not installed")
-    
     def test_opencv_import(self):
         """Test OpenCV is installed."""
         import cv2
         print(f"OpenCV version: {cv2.__version__}")
+
+    def test_opencv_face_api(self):
+        """Test OpenCV has the face detector/recognizer APIs used by auth."""
+        import cv2
+
+        assert hasattr(cv2, "FaceDetectorYN_create")
+        assert hasattr(cv2, "FaceRecognizerSF_create")
     
     def test_numpy_import(self):
         """Test NumPy is installed."""

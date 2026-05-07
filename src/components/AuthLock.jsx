@@ -19,8 +19,12 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
                 // Wait for animation then notify parent
                 setTimeout(() => {
                     onAuthenticated(true);
+                    if (onAnimationComplete) {
+                        onAnimationComplete();
+                    }
                 }, 2000); // 2 seconds animation
-            } else if (!data.authenticated && !isUnlocking) {
+            } else if (!data.authenticated) {
+                setIsUnlocking(false);
                 setMessage("Look at the camera to unlock.");
             }
         };

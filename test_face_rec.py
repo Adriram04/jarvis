@@ -1,5 +1,5 @@
 """
-Legacy face-recognition smoke test updated for the current MediaPipe-based
+Legacy face-recognition smoke test updated for the current OpenCV SFace-based
 FaceAuthenticator implementation.
 """
 import sys
@@ -30,13 +30,13 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_face_authenticator_imports_current_stack():
-    """The active face-auth stack uses MediaPipe, OpenCV, and NumPy."""
+    """The active face-auth stack uses OpenCV's face identity APIs and NumPy."""
     import cv2
-    import mediapipe
 
     assert FaceAuthenticator is not None
     assert cv2.__version__
-    assert mediapipe.__version__
+    assert hasattr(cv2, "FaceDetectorYN_create")
+    assert hasattr(cv2, "FaceRecognizerSF_create")
 
 
 def test_face_authenticator_handles_missing_reference():
@@ -44,6 +44,7 @@ def test_face_authenticator_handles_missing_reference():
     auth = FaceAuthenticator(reference_image_path="missing_reference.jpg")
 
     assert auth is not None
+    assert auth.reference_embedding is None
     assert auth.reference_landmarks is None
     assert auth.authenticated is False
 
@@ -53,12 +54,12 @@ def test_blank_image_has_no_face_landmarks():
     auth = FaceAuthenticator(reference_image_path="missing_reference.jpg")
     blank_image = np.zeros((100, 100, 3), dtype=np.uint8)
 
-    assert auth._extract_landmarks(blank_image) is None
+    assert auth._extract_face_embedding(blank_image) is None
 
 
-def test_landmark_comparison_for_identical_vectors():
-    """Identical landmark vectors should authenticate as a match."""
+def test_embedding_comparison_for_identical_vectors():
+    """Identical identity vectors should authenticate as a match."""
     auth = FaceAuthenticator(reference_image_path="missing_reference.jpg")
-    landmarks = np.random.rand(1404).astype(np.float32)
+    embedding = np.random.default_rng(0).normal(size=128).astype(np.float32)
 
-    assert bool(auth._compare_landmarks(landmarks, landmarks)) is True
+    assert bool(auth._compare_embeddings(embedding, embedding)) is True

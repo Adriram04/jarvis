@@ -20,7 +20,7 @@
 | CAD generativo | Generacion e iteracion de modelos 3D desde prompts | build123d, STL |
 | Impresion 3D | Descubrimiento de impresoras, slicing y envio de trabajos | OrcaSlicer, Moonraker, OctoPrint |
 | Vision y gestos | Interaccion con camara y seguimiento de manos | MediaPipe |
-| Autenticacion facial | Bloqueo opcional mediante referencia facial local | MediaPipe Face Landmarker |
+| Autenticacion facial | Bloqueo opcional mediante referencia facial local | OpenCV YuNet + SFace |
 | Agente web | Navegacion automatizada en navegador | Playwright |
 | Smart Home | Control de dispositivos TP-Link Kasa | python-kasa |
 | Memoria de proyecto | Historial y artefactos persistentes por proyecto | JSONL y archivos locales |
@@ -233,7 +233,7 @@ La autenticacion facial es opcional. Para usarla:
 
 3. Activa `face_auth_enabled` en `backend/settings.json`.
 
-La imagen de referencia se procesa localmente y no debe subirse al repositorio.
+La imagen de referencia se procesa localmente y no debe subirse al repositorio. Los modelos YuNet/SFace de OpenCV se descargan automaticamente en `backend/` la primera vez que se inicializa la autenticacion.
 
 ---
 
@@ -301,12 +301,13 @@ jarvis/
 |   |-- printer_agent.py       # Descubrimiento, slicing e impresion 3D
 |   |-- web_agent.py           # Automatizacion web con Playwright
 |   |-- kasa_agent.py          # Control TP-Link Kasa
-|   |-- authenticator.py       # Autenticacion facial con MediaPipe
+|   |-- authenticator.py       # Autenticacion facial con OpenCV YuNet + SFace
 |   |-- capture_face.py        # Captura de imagen facial de referencia
 |   |-- project_manager.py     # Gestion de proyectos y memoria
 |   |-- tools.py               # Definiciones de herramientas para Gemini
 |   |-- settings.json          # Configuracion local
-|   `-- face_landmarker.task   # Modelo MediaPipe
+|   |-- face_detection_yunet_*.onnx    # Modelo descargado localmente
+|   `-- face_recognition_sface_*.onnx # Modelo descargado localmente
 |-- src/
 |   |-- App.jsx
 |   |-- main.jsx

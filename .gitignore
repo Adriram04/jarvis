@@ -11,6 +11,8 @@ env/
 backend/reference.jpg
 backend/settings.json
 backend/last_cad_generation.json
+backend/face_detection_yunet_*.onnx
+backend/face_recognition_sface_*.onnx
 long_term_memory/
 projects/
 output.stl

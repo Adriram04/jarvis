@@ -126,6 +126,10 @@ function App() {
     const isHandTrackingEnabledRef = useRef(false); // DEFAULT OFF
     const cursorSensitivityRef = useRef(2.0);
     const isCameraFlippedRef = useRef(false);
+    const faceAuthEnabledRef = useRef(faceAuthEnabled);
+    const micDevicesRef = useRef([]);
+    const selectedMicIdRef = useRef(selectedMicId);
+    const pendingPowerOnRef = useRef(false);
     const handLandmarkerRef = useRef(null);
     const cursorTrailRef = useRef([]); // Stores last N positions for trail
     const [ripples, setRipples] = useState([]); // Visual ripples on click
@@ -173,8 +177,11 @@ function App() {
         isHandTrackingEnabledRef.current = isHandTrackingEnabled;
         cursorSensitivityRef.current = cursorSensitivity;
         isCameraFlippedRef.current = isCameraFlipped;
+        faceAuthEnabledRef.current = faceAuthEnabled;
+        micDevicesRef.current = micDevices;
+        selectedMicIdRef.current = selectedMicId;
         console.log("[Ref Sync] Camera flipped ref updated to:", isCameraFlipped);
-    }, [isModularMode, elementPositions, isHandTrackingEnabled, cursorSensitivity, isCameraFlipped]);
+    }, [isModularMode, elementPositions, isHandTrackingEnabled, cursorSensitivity, isCameraFlipped, faceAuthEnabled, micDevices, selectedMicId]);
 
     // Live Clock Update
     useEffect(() => {
@@ -300,6 +307,22 @@ function App() {
         socketConnectedRef.current = socketConnected;
     }, [socketConnected]);
 
+    const requestStartAudio = (muted = isMuted) => {
+        const devices = micDevicesRef.current;
+        const selectedId = selectedMicIdRef.current;
+        const index = devices.findIndex(d => d.deviceId === selectedId);
+        const queryDevice = devices.find(d => d.deviceId === selectedId);
+        const deviceName = queryDevice ? queryDevice.label : null;
+
+        console.log("Starting model with device:", deviceName, "Index:", index);
+        setStatus('Connecting...');
+        socket.emit('start_audio', {
+            device_index: index >= 0 ? index : null,
+            device_name: deviceName,
+            muted
+        });
+    };
+
     // Auto-Connect Model on Start (Only after Auth and devices loaded)
     useEffect(() => {
         // Only auto-connect once: when socket connected, authenticated, and devices loaded
@@ -312,20 +335,10 @@ function App() {
 
             // Connect to model with small delay for socket stability
             const timer = setTimeout(() => {
-                const index = micDevices.findIndex(d => d.deviceId === selectedMicId);
-                const queryDevice = micDevices.find(d => d.deviceId === selectedMicId);
-                const deviceName = queryDevice ? queryDevice.label : null;
-                console.log("Auto-connecting to model with device:", deviceName, "Index:", index);
-
-                setStatus('Connecting...');
-                socket.emit('start_audio', {
-                    device_index: index >= 0 ? index : null,
-                    device_name: deviceName,
-                    muted: isMuted
-                });
+                requestStartAudio(isMuted);
             }, 500);
         }
-    }, [isConnected, isAuthenticated, socketConnected, micDevices, selectedMicId]);
+    }, [isConnected, isAuthenticated, socketConnected, micDevices, selectedMicId, isMuted]);
 
     useEffect(() => {
         // Socket IO Setup
@@ -354,17 +367,20 @@ function App() {
             console.log("Auth Status:", data);
             setIsAuthenticated(data.authenticated);
             if (data.authenticated) {
-                // If authenticated, hide lock screen with animation (handled by component if visible)
-                // But simpler: just hide it
-                // Actually, wait for animation if it WAS visible.
-                // For now, let's just assume if authenticated -> hide
-                // But we want the component to invoke onAnimationComplete.
-                // If we are starting up (and face auth disabled), we want it FALSE immediately.
-                if (!isLockScreenVisible) {
-                    // Do nothing, already hidden
+                if (pendingPowerOnRef.current) {
+                    pendingPowerOnRef.current = false;
+                    hasAutoConnectedRef.current = true;
+                    setIsConnected(true);
+                    setIsMuted(false);
+                    requestStartAudio(false);
+                }
+                if (!faceAuthEnabledRef.current) {
+                    setIsLockScreenVisible(false);
                 }
             } else {
-                // If NOT authenticated, show lock screen
+                if (isVideoOnRef.current) {
+                    stopVideo();
+                }
                 setIsLockScreenVisible(true);
             }
         });
@@ -382,6 +398,10 @@ function App() {
         });
         socket.on('error', (data) => {
             console.error("Socket Error:", data);
+            if (data.msg === 'Authentication Required') {
+                setStatus('Authentication Required');
+                return;
+            }
             addMessage('System', `Error: ${data.msg}`);
         });
         socket.on('cad_data', (data) => {
@@ -1139,12 +1159,23 @@ function App() {
 
     const togglePower = () => {
         if (isConnected) {
+            pendingPowerOnRef.current = false;
             socket.emit('stop_audio');
             setIsConnected(false);
             setIsMuted(false); // Reset mute state
+            if (faceAuthEnabledRef.current) {
+                setIsAuthenticated(false);
+                setIsLockScreenVisible(false);
+            }
         } else {
-            const index = micDevices.findIndex(d => d.deviceId === selectedMicId);
-            socket.emit('start_audio', { device_index: index >= 0 ? index : null });
+            if (faceAuthEnabledRef.current && !isAuthenticated) {
+                pendingPowerOnRef.current = true;
+                requestStartAudio(false);
+                return;
+            }
+
+            hasAutoConnectedRef.current = true;
+            requestStartAudio(false);
             setIsConnected(true);
             setIsMuted(false); // Start unmuted
         }

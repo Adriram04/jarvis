@@ -190,6 +190,15 @@ authenticator = None
 kasa_agent = KasaAgent(known_devices=SETTINGS.get("kasa_devices"))
 # tool_permissions is now SETTINGS["tool_permissions"]
 
+async def require_fresh_face_auth(reload_reference=False):
+    """Reset auth state and start face authentication when the feature is enabled."""
+    if not SETTINGS.get("face_auth_enabled", False) or not authenticator:
+        return
+
+    authenticator.reset_authentication(reload_reference=reload_reference)
+    await sio.emit('auth_status', {'authenticated': False})
+    asyncio.create_task(authenticator.start_authentication_loop())
+
 @app.on_event("startup")
 async def startup_event():
     import sys
@@ -234,21 +243,11 @@ async def connect(sid, environ):
             on_frame=on_auth_frame
         )
     
-    # Check if already authenticated or needs to start
-    if authenticator.authenticated:
-        await sio.emit('auth_status', {'authenticated': True})
+    if SETTINGS.get("face_auth_enabled", False):
+        await require_fresh_face_auth(reload_reference=True)
     else:
-        # Check Settings for Auth
-        if SETTINGS.get("face_auth_enabled", False):
-            await sio.emit('auth_status', {'authenticated': False})
-            # Start the auth loop in background
-            asyncio.create_task(authenticator.start_authentication_loop())
-        else:
-            # Bypass Auth
-            print("Face Auth Disabled. Auto-authenticating.")
-            # We don't change authenticator state to true to avoid confusion if re-enabled? 
-            # Or we should just tell client it's auth'd.
-            await sio.emit('auth_status', {'authenticated': True})
+        print("Face Auth Disabled. Auto-authenticating.")
+        await sio.emit('auth_status', {'authenticated': True})
 
 @sio.event
 async def disconnect(sid):
@@ -261,8 +260,14 @@ async def start_audio(sid, data=None):
     # Optional: Block if not authenticated
     # Only block if auth is ENABLED and not authenticated
     if SETTINGS.get("face_auth_enabled", False):
-        if authenticator and not authenticator.authenticated:
-            print("Blocked start_audio: Not authenticated.")
+        if not authenticator:
+            print("Blocked start_audio: Authenticator not initialized.")
+            await sio.emit('error', {'msg': 'Authentication Unavailable'})
+            return
+
+        if not authenticator.authenticated:
+            print("Blocked start_audio: Not authenticated. Starting face auth now.")
+            await require_fresh_face_auth(reload_reference=True)
             await sio.emit('error', {'msg': 'Authentication Required'})
             return
 
@@ -485,6 +490,10 @@ async def stop_audio(sid):
             loop_task = None
 
         await sio.emit('status', {'msg': 'J.A.R.V.I.S Stopped'})
+
+        if SETTINGS.get("face_auth_enabled", False) and authenticator:
+            print("[SERVER] Face Auth enabled. Clearing auth state after stop; will prompt on next start.")
+            authenticator.reset_authentication()
 
 @sio.event
 async def pause_audio(sid):
@@ -1071,10 +1080,10 @@ async def update_settings(sid, data):
             
     if "face_auth_enabled" in data:
         SETTINGS["face_auth_enabled"] = data["face_auth_enabled"]
-        # If turned OFF, maybe emit auth status true?
-        if not data["face_auth_enabled"]:
+        if data["face_auth_enabled"]:
+             await require_fresh_face_auth(reload_reference=True)
+        else:
              await sio.emit('auth_status', {'authenticated': True})
-             # Stop auth loop if running?
              if authenticator:
                  authenticator.stop() 
 
