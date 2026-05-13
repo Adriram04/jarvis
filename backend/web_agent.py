@@ -18,7 +18,22 @@ if not API_KEY:
 SCREEN_WIDTH = 1440
 SCREEN_HEIGHT = 900
 # UPDATED: Use the specific Computer Use preview model
-MODEL_ID = "gemini-2.5-computer-use-preview-10-2025"
+MODEL_ID = "gemini-3-flash-preview"
+
+
+class WebAgentQuotaError(RuntimeError):
+    """Raised when the Gemini Computer Use model is unavailable due to quota."""
+
+
+def _friendly_api_error(error):
+    message = str(error)
+    if "RESOURCE_EXHAUSTED" in message or "Quota exceeded" in message or "429" in message:
+        return (
+            "Web Agent unavailable: Gemini Computer Use quota is exhausted or not enabled "
+            f"for this API project/model ({MODEL_ID}). Check your Gemini billing/quota, "
+            "or try again later if this is a temporary rate limit."
+        )
+    return f"Web Agent API error: {message}"
 
 class WebAgent:
     def __init__(self):
@@ -245,9 +260,14 @@ class WebAgent:
                         config=config
                     )
                 except Exception as e:
-                    print(f"[CRITICAL] Critical API Error: {e}")
-                    if update_callback: await update_callback(None, f"Error: {e}")
-                    break
+                    friendly_error = _friendly_api_error(e)
+                    print(f"[CRITICAL] {friendly_error}")
+                    if update_callback:
+                        await update_callback(None, f"Error: {friendly_error}")
+                    if self.browser:
+                        await self.browser.close()
+                        self.browser = None
+                    raise WebAgentQuotaError(friendly_error) from e
                 
                 # Check for empty response
                 if not response.candidates:
@@ -310,7 +330,9 @@ class WebAgent:
                 response_parts = [types.Part(function_response=fr) for fr in function_responses]
                 chat_history.append(types.Content(role="user", parts=response_parts))
 
-            await self.browser.close()
+            if self.browser:
+                await self.browser.close()
+                self.browser = None
             print("[CLOSE] Browser closed.")
             return final_response
 

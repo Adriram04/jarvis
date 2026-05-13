@@ -5,7 +5,7 @@ import pytest
 import asyncio
 import os
 
-from web_agent import WebAgent
+from web_agent import MODEL_ID, WebAgent, _friendly_api_error
 
 
 class TestWebAgentInit:
@@ -24,6 +24,16 @@ class TestWebAgentInit:
         assert hasattr(agent, 'browser')
         assert hasattr(agent, 'page')
         assert hasattr(agent, 'context')
+
+    def test_quota_error_message_is_user_friendly(self):
+        """Test quota errors are summarized without dumping the full API payload."""
+        error = RuntimeError("429 RESOURCE_EXHAUSTED. Quota exceeded for metric: generate_content_free_tier_requests")
+
+        message = _friendly_api_error(error)
+
+        assert "Web Agent unavailable" in message
+        assert MODEL_ID in message
+        assert "RESOURCE_EXHAUSTED" not in message
 
 
 class TestCoordinateDenormalization:

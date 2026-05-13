@@ -1028,19 +1028,12 @@ async def prompt_web_agent(sid, data):
 
     try:
         await sio.emit('status', {'msg': 'Web Agent running...'})
-        
-        # We assume web_agent has a run method or similar.
-        # This might block the loop if not strictly async or offloaded.
-        # Ideally web_agent.run is async.
-        # And it should emit 'browser_snap' and logs automatically via hooks if setup.
-        
-        # We might need to launch this as a task if it's long running?
-        # asyncio.create_task(audio_loop.web_agent.run(prompt))
-        # But we want to catch errors here.
-        
-        # Based on typical agent design, run() is the entry point.
-        await audio_loop.web_agent.run(prompt)
-        
+
+        async def on_web_update(image_b64, log_text):
+            await sio.emit('browser_frame', {'image': image_b64, 'log': log_text})
+
+        result = await audio_loop.web_agent.run_task(prompt, update_callback=on_web_update)
+        await sio.emit('browser_frame', {'image': None, 'log': result})
         await sio.emit('status', {'msg': 'Web Agent finished'})
         
     except Exception as e:

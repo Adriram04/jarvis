@@ -315,7 +315,7 @@ config = types.LiveConnectConfig(
 pya = pyaudio.PyAudio()
 
 from cad_agent import CadAgent
-from web_agent import WebAgent
+from web_agent import WebAgent, WebAgentQuotaError
 from kasa_agent import KasaAgent
 from printer_agent import PrinterAgent
 
@@ -1019,9 +1019,15 @@ class AudioLoop:
             if self.on_web_data:
                  self.on_web_data({"image": image_b64, "log": log_text})
                  
-        # Run the web agent and wait for it to return
-        result = await self.web_agent.run_task(prompt, update_callback=update_frontend)
-        print(f"[JARVIS DEBUG] [WEB] Web Agent Task Returned: {result}")
+        try:
+            result = await self.web_agent.run_task(prompt, update_callback=update_frontend)
+            print(f"[JARVIS DEBUG] [WEB] Web Agent Task Returned: {result}")
+        except WebAgentQuotaError as e:
+            result = str(e)
+            print(f"[JARVIS DEBUG] [WEB] Web Agent quota error: {result}")
+        except Exception as e:
+            result = f"Web Agent failed: {e}"
+            print(f"[JARVIS DEBUG] [WEB] {result}")
         
         # Send the final result back to the main model
         try:
