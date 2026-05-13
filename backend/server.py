@@ -8,7 +8,8 @@ if sys.platform == 'win32':
 
 import socketio
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import threading
 import sys
@@ -33,10 +34,20 @@ for import_path in (PROJECT_ROOT, BACKEND_DIR):
 import backend.jarvis as jarvis
 from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
+from simulation_manager import simulation_manager
+from simulators.kasa_simulator import kasa_simulator
+from simulators.printer_simulator import printer_simulator
 
 # Create a Socket.IO server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "null"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app_socketio = socketio.ASGIApp(sio, app)
 
 import signal
@@ -80,6 +91,64 @@ def _is_camera_question(text, loop=None):
 
     return False
 
+SIMULATION_ACTIVATE_PHRASES = [
+    "activa el modo simulacion",
+    "activar modo simulacion",
+    "activa la simulacion",
+    "activar simulacion",
+    "modo demo",
+    "activa modo demo",
+    "activar modo demo",
+]
+
+SIMULATION_DEACTIVATE_PHRASES = [
+    "desactiva el modo simulacion",
+    "desactivar modo simulacion",
+    "desactiva la simulacion",
+    "desactivar simulacion",
+    "desactiva modo demo",
+    "desactivar modo demo",
+]
+
+def _simulation_command_intent(text):
+    normalized = _normalize_text_for_match(text)
+    if any(phrase in normalized for phrase in SIMULATION_DEACTIVATE_PHRASES):
+        return "deactivate"
+    if any(phrase in normalized for phrase in SIMULATION_ACTIVATE_PHRASES):
+        return "activate"
+    return None
+
+async def _simulation_kasa_devices():
+    if not simulation_manager.is_kasa_enabled():
+        return []
+    return await kasa_simulator.discover_devices()
+
+async def _simulation_printers():
+    if not simulation_manager.is_printer_enabled():
+        return []
+    return await printer_simulator.discover_printers()
+
+async def emit_simulation_snapshot(message=None):
+    state = simulation_manager.get_state()
+    await sio.emit('simulation_status', state)
+    await sio.emit('simulation_kasa_devices', await _simulation_kasa_devices())
+    await sio.emit('simulation_printers', await _simulation_printers())
+    if message:
+        await sio.emit('simulation_event', {'message': message, 'timestamp': datetime.now().isoformat(timespec='seconds')})
+
+async def set_simulation_mode(enabled):
+    if enabled:
+        simulation_manager.activate_all()
+        kasa_simulator.reset()
+        printer_simulator.reset()
+        message = "Modo simulacion activado. A partir de ahora usare dispositivos Kasa e impresoras 3D simuladas."
+    else:
+        simulation_manager.deactivate_all()
+        message = "Modo simulacion desactivado. Volvere a usar dispositivos reales si estan disponibles."
+
+    await emit_simulation_snapshot(message)
+    return message
+
 def signal_handler(sig, frame):
     print(f"\n[SERVER] Caught signal {sig}. Exiting gracefully...")
     # Clean up audio loop
@@ -118,7 +187,16 @@ DEFAULT_SETTINGS = {
         "delete_project": True,
         "create_project": True,
         "switch_project": True,
-        "list_projects": True
+        "list_projects": True,
+        "discover_printers": True,
+        "print_stl": True,
+        "get_print_status": True,
+        "pause_print": True,
+        "resume_print": True,
+        "cancel_print": True,
+        "activate_simulation_mode": False,
+        "deactivate_simulation_mode": False,
+        "get_simulation_status": False
     },
     "printers": [], # List of {host, port, name, type}
     "kasa_devices": [], # List of {ip, alias, model}
@@ -219,10 +297,128 @@ async def startup_event():
 async def status():
     return {"status": "running", "service": "J.A.R.V.I.S Backend"}
 
+@app.post("/api/simulation/activate")
+async def api_simulation_activate():
+    message = await set_simulation_mode(True)
+    return {"message": message, "state": simulation_manager.get_state()}
+
+@app.post("/api/simulation/deactivate")
+async def api_simulation_deactivate():
+    message = await set_simulation_mode(False)
+    return {"message": message, "state": simulation_manager.get_state()}
+
+@app.post("/api/simulation/reset")
+async def api_simulation_reset():
+    kasa_simulator.reset()
+    printer_simulator.reset()
+    await emit_simulation_snapshot("Demo reiniciada")
+    return {"message": "Demo reiniciada", "state": simulation_manager.get_state()}
+
+@app.get("/api/simulation/status")
+async def api_simulation_status():
+    return {
+        "state": simulation_manager.get_state(),
+        "kasa_devices": await _simulation_kasa_devices(),
+        "printers": await _simulation_printers(),
+    }
+
+@app.get("/api/simulation/kasa/devices")
+async def api_simulation_kasa_devices():
+    return await _simulation_kasa_devices()
+
+def _require_kasa_simulation():
+    if not simulation_manager.is_kasa_enabled():
+        raise HTTPException(status_code=409, detail="Kasa simulation is not active.")
+
+@app.post("/api/simulation/kasa/{target}/on")
+async def api_simulation_kasa_on(target: str):
+    _require_kasa_simulation()
+    await kasa_simulator.turn_on(target)
+    await emit_simulation_snapshot(f"{target} encendido")
+    return kasa_simulator.get_state(target)
+
+@app.post("/api/simulation/kasa/{target}/off")
+async def api_simulation_kasa_off(target: str):
+    _require_kasa_simulation()
+    await kasa_simulator.turn_off(target)
+    await emit_simulation_snapshot(f"{target} apagado")
+    return kasa_simulator.get_state(target)
+
+@app.post("/api/simulation/kasa/{target}/brightness")
+async def api_simulation_kasa_brightness(target: str, data: dict = Body(default={})):
+    _require_kasa_simulation()
+    value = data.get("brightness", data.get("value"))
+    if value is None:
+        raise HTTPException(status_code=400, detail="brightness is required.")
+    await kasa_simulator.set_brightness(target, value)
+    await emit_simulation_snapshot(f"{target} brillo {value}%")
+    return kasa_simulator.get_state(target)
+
+@app.post("/api/simulation/kasa/{target}/color")
+async def api_simulation_kasa_color(target: str, data: dict = Body(default={})):
+    _require_kasa_simulation()
+    value = data.get("color", data.get("value", data))
+    await kasa_simulator.set_color(target, value)
+    await emit_simulation_snapshot(f"{target} color actualizado")
+    return kasa_simulator.get_state(target)
+
+@app.get("/api/simulation/printers")
+async def api_simulation_printers():
+    return await _simulation_printers()
+
+def _require_printer_simulation():
+    if not simulation_manager.is_printer_enabled():
+        raise HTTPException(status_code=409, detail="Printer simulation is not active.")
+
+@app.get("/api/simulation/printers/{target}/status")
+async def api_simulation_printer_status(target: str):
+    _require_printer_simulation()
+    status_data = await printer_simulator.get_print_status(target)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Demo printer not found.")
+    return status_data
+
+@app.post("/api/simulation/printers/{target}/start")
+async def api_simulation_printer_start(target: str, data: dict = Body(default={})):
+    _require_printer_simulation()
+    status_data = await printer_simulator.start_demo_print(target, data.get("filename", "jarvis_demo_part.gcode"))
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Demo printer not found.")
+    await emit_simulation_snapshot(f"Impresion demo iniciada en {status_data['printer']}")
+    return status_data
+
+@app.post("/api/simulation/printers/{target}/pause")
+async def api_simulation_printer_pause(target: str):
+    _require_printer_simulation()
+    status_data = await printer_simulator.pause_print(target)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Demo printer not found.")
+    await emit_simulation_snapshot(f"Impresion pausada en {status_data['printer']}")
+    return status_data
+
+@app.post("/api/simulation/printers/{target}/resume")
+async def api_simulation_printer_resume(target: str):
+    _require_printer_simulation()
+    status_data = await printer_simulator.resume_print(target)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Demo printer not found.")
+    await emit_simulation_snapshot(f"Impresion reanudada en {status_data['printer']}")
+    return status_data
+
+@app.post("/api/simulation/printers/{target}/cancel")
+async def api_simulation_printer_cancel(target: str):
+    _require_printer_simulation()
+    status_data = await printer_simulator.cancel_print(target)
+    if not status_data:
+        raise HTTPException(status_code=404, detail="Demo printer not found.")
+    await emit_simulation_snapshot(f"Impresion cancelada en {status_data['printer']}")
+    return status_data
+
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
     await sio.emit('status', {'msg': 'Connected to J.A.R.V.I.S Backend'}, room=sid)
+    await sio.emit('simulation_status', simulation_manager.get_state(), room=sid)
 
     global authenticator
     
@@ -350,6 +546,9 @@ async def start_audio(sid, data=None):
         print(f"Sending Kasa Device Update: {len(devices)} devices")
         asyncio.create_task(sio.emit('kasa_devices', devices))
 
+    def on_simulation_update(message=None):
+        asyncio.create_task(emit_simulation_snapshot(message))
+
     # Callback to send Error to frontend
     def on_error(msg):
         print(f"Sending Error to frontend: {msg}")
@@ -369,6 +568,7 @@ async def start_audio(sid, data=None):
             on_cad_thought=on_cad_thought,
             on_project_update=on_project_update,
             on_device_update=on_device_update,
+            on_simulation_update=on_simulation_update,
             on_error=on_error,
 
             input_device_index=device_index,
@@ -432,6 +632,13 @@ async def monitor_printers_loop():
     print("[SERVER] Starting Printer Monitor Loop")
     while audio_loop and audio_loop.printer_agent:
         try:
+            if simulation_manager.is_printer_enabled():
+                for status_data in printer_simulator.get_all_printer_states():
+                    await sio.emit('print_status_update', status_data)
+                await emit_simulation_snapshot()
+                await asyncio.sleep(2)
+                continue
+
             agent = audio_loop.printer_agent
             if not agent.printers:
                 await asyncio.sleep(5)
@@ -559,7 +766,15 @@ async def shutdown(sid, data=None):
 async def user_input(sid, data):
     text = data.get('text')
     print(f"[SERVER DEBUG] User input received: '{text}'")
-    
+
+    intent = _simulation_command_intent(text)
+    if intent:
+        message = await set_simulation_mode(intent == "activate")
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message})
+        if audio_loop and audio_loop.project_manager:
+            audio_loop.project_manager.log_chat("JARVIS", message)
+        return
+
     if not audio_loop:
         print("[SERVER DEBUG] [Error] Audio loop is None. Cannot send text.")
         return
@@ -699,6 +914,10 @@ async def discover_kasa(sid):
         devices = await kasa_agent.discover_devices()
         await sio.emit('kasa_devices', devices)
         await sio.emit('status', {'msg': f"Found {len(devices)} Kasa devices"})
+
+        if simulation_manager.is_kasa_enabled():
+            await emit_simulation_snapshot("Detectados dispositivos Kasa simulados")
+            return
         
         # Save to settings
         # devices is a list of full device info dicts. minimizing for storage.
@@ -831,6 +1050,13 @@ async def prompt_web_agent(sid, data):
 @sio.event
 async def discover_printers(sid):
     print("Received discover_printers request")
+
+    if simulation_manager.is_printer_enabled():
+        printers = await printer_simulator.discover_printers()
+        await sio.emit('printer_list', printers)
+        await sio.emit('status', {'msg': f"Found {len(printers)} demo printers"})
+        await emit_simulation_snapshot("Detectadas impresoras simuladas")
+        return
     
     # If audio_loop isn't ready yet, return saved printers from settings
     if not audio_loop or not audio_loop.printer_agent:
@@ -858,6 +1084,8 @@ async def discover_printers(sid):
         printers = await audio_loop.printer_agent.discover_printers()
         await sio.emit('printer_list', printers)
         await sio.emit('status', {'msg': f"Found {len(printers)} printers"})
+        if simulation_manager.is_printer_enabled():
+            await emit_simulation_snapshot("Detectadas impresoras simuladas")
     except Exception as e:
         print(f"Error discovering printers: {e}")
         await sio.emit('error', {'msg': f"Printer Discovery Failed: {str(e)}"})
@@ -943,6 +1171,24 @@ async def add_printer(sid, data):
 async def print_stl(sid, data):
     print(f"Received print_stl request: {data}")
     # data: { stl_path: "path/to.stl" | "current", printer: "name_or_ip", profile: "optional" }
+
+    if simulation_manager.is_printer_enabled():
+        printer_name = data.get('printer')
+        if not printer_name:
+            await sio.emit('error', {'msg': "No printer specified"})
+            return
+        filename = os.path.splitext(os.path.basename(data.get('stl_path', 'jarvis_demo_part')))[0] or "jarvis_demo_part"
+        if not filename.endswith(".gcode"):
+            filename = f"{filename}.gcode"
+        status_data = await printer_simulator.start_demo_print(printer_name, filename)
+        if not status_data:
+            await sio.emit('error', {'msg': f"Demo printer not found: {printer_name}"})
+            return
+        result = {"status": "success", "success": True, "message": f"Demo print started on {status_data['printer']}."}
+        await sio.emit('print_result', result)
+        await sio.emit('status', {'msg': result["message"]})
+        await emit_simulation_snapshot(result["message"])
+        return
     
     if not audio_loop or not audio_loop.printer_agent:
         await sio.emit('error', {'msg': "Printer Agent not available"})
@@ -1006,6 +1252,8 @@ async def print_stl(sid, data):
         
         await sio.emit('print_result', result)
         await sio.emit('status', {'msg': f"Print Job: {result.get('status', 'unknown')}"})
+        if simulation_manager.is_printer_enabled():
+            await emit_simulation_snapshot(result.get("message", "Impresion demo iniciada"))
         
     except Exception as e:
         print(f"Error printing STL: {e}")
@@ -1055,7 +1303,11 @@ async def control_kasa(sid, data):
                 'is_on': True if action == "on" else (False if action == "off" else None),
                 'brightness': data.get('value') if action == "brightness" else None,
             })
- 
+            devices = kasa_agent.get_all_states()
+            await sio.emit('kasa_devices', devices)
+            if simulation_manager.is_kasa_enabled():
+                await emit_simulation_snapshot(kasa_simulator.last_operation_message)
+  
         else:
              await sio.emit('error', {'msg': f"Failed to control device {ip}"})
 

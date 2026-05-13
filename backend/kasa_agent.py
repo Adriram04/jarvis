@@ -1,10 +1,14 @@
 import asyncio
 from kasa import Discover, SmartDevice, SmartBulb, SmartPlug
+from simulation_manager import simulation_manager
+from simulators.kasa_simulator import kasa_simulator
 
 class KasaAgent:
     def __init__(self, known_devices=None):
         self.devices = {}
         self.known_devices_config = known_devices or []
+        self.simulation_manager = simulation_manager
+        self.kasa_simulator = kasa_simulator
 
     async def initialize(self):
         """Initializes devices from the saved configuration."""
@@ -40,6 +44,9 @@ class KasaAgent:
 
     async def discover_devices(self):
         """Discovers devices on the local network."""
+        if self.simulation_manager.is_kasa_enabled():
+            return await self.kasa_simulator.discover_devices()
+
         print("Discovering Kasa devices (Broadcast)...")
         # Use explicit broadcast and slightly longer timeout for Windows reliability
         found_devices = await Discover.discover(target="255.255.255.255", timeout=5)
@@ -126,6 +133,9 @@ class KasaAgent:
 
     async def turn_on(self, target):
         """Turns on the device (Target: IP or Alias)."""
+        if self.simulation_manager.is_kasa_enabled():
+            return await self.kasa_simulator.turn_on(target)
+
         dev = self._resolve_device(target)
         if dev:
             try:
@@ -151,6 +161,9 @@ class KasaAgent:
 
     async def turn_off(self, target):
         """Turns off the device (Target: IP or Alias)."""
+        if self.simulation_manager.is_kasa_enabled():
+            return await self.kasa_simulator.turn_off(target)
+
         dev = self._resolve_device(target)
         if dev:
             try:
@@ -175,6 +188,9 @@ class KasaAgent:
 
     async def set_brightness(self, target, brightness):
         """Sets brightness (0-100)."""
+        if self.simulation_manager.is_kasa_enabled():
+            return await self.kasa_simulator.set_brightness(target, brightness)
+
         dev = self._resolve_device(target)
         if dev and (dev.is_dimmable or dev.is_bulb):
             try:
@@ -187,6 +203,9 @@ class KasaAgent:
 
     async def set_color(self, target, color_input):
         """Sets color by name or direct HSV tuple."""
+        if self.simulation_manager.is_kasa_enabled():
+            return await self.kasa_simulator.set_color(target, color_input)
+
         dev = self._resolve_device(target)
         if not dev or not dev.is_color:
             return False
@@ -206,6 +225,53 @@ class KasaAgent:
             except Exception as e:
                  print(f"Error setting color for {target}: {e}")
         return False
+
+    def get_state(self, target):
+        if self.simulation_manager.is_kasa_enabled():
+            return self.kasa_simulator.get_state(target)
+
+        dev = self._resolve_device(target)
+        if not dev:
+            return None
+        return self._device_to_info(dev.host if hasattr(dev, "host") else target, dev)
+
+    def get_all_states(self):
+        if self.simulation_manager.is_kasa_enabled():
+            return self.kasa_simulator.get_all_states()
+        return self.get_devices_list()
+
+    def get_devices_list(self):
+        device_list = []
+        for ip, dev in self.devices.items():
+            device_list.append(self._device_to_info(ip, dev))
+        return device_list
+
+    def _device_to_info(self, ip, dev):
+        dev_type = "unknown"
+        if dev.is_bulb:
+            dev_type = "bulb"
+        elif dev.is_plug:
+            dev_type = "plug"
+        elif dev.is_strip:
+            dev_type = "strip"
+        elif dev.is_dimmer:
+            dev_type = "dimmer"
+
+        return {
+            "ip": ip,
+            "alias": dev.alias,
+            "name": dev.alias,
+            "model": dev.model,
+            "type": dev_type,
+            "is_on": dev.is_on,
+            "brightness": dev.brightness if dev.is_bulb or dev.is_dimmer else None,
+            "hsv": dev.hsv if dev.is_bulb and dev.is_color else None,
+            "has_color": dev.is_color if dev.is_bulb else False,
+            "has_brightness": dev.is_dimmable if dev.is_bulb or dev.is_dimmer else False,
+            "wifi_signal": None,
+            "energy_w": None,
+            "last_updated": None,
+        }
 
 # Standalone test
 if __name__ == "__main__":

@@ -18,6 +18,8 @@ from enum import Enum
 
 import aiohttp
 from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
+from simulation_manager import simulation_manager
+from simulators.printer_simulator import printer_simulator
 
 DEFAULT_SLICER_TIMEOUT_SECONDS = 300
 
@@ -110,6 +112,8 @@ class PrinterAgent:
         self._zeroconf: Optional[Zeroconf] = None
         self._error_tracker = set() # Track hosts with errors to prevent log spam
         self.slicer_timeout_seconds = self._resolve_slicer_timeout_seconds()
+        self.simulation_manager = simulation_manager
+        self.printer_simulator = printer_simulator
         
         # Detect slicer path and profiles directory
         self.slicer_path = self._detect_slicer_path()
@@ -370,6 +374,9 @@ class PrinterAgent:
         Discovers 3D printers on the local network via mDNS.
         Returns list of discovered printers.
         """
+        if self.simulation_manager.is_printer_enabled():
+            return await self.printer_simulator.discover_printers()
+
         print(f"[PRINTER] Starting printer discovery (timeout: {timeout}s)...")
         
         self._zeroconf = Zeroconf()
@@ -869,6 +876,10 @@ class PrinterAgent:
         """
         Get current status of a printer.
         """
+        if self.simulation_manager.is_printer_enabled():
+            status = await self.printer_simulator.get_print_status(target)
+            return self._print_status_from_simulation(status) if status else None
+
         printer = self._resolve_printer(target)
         if not printer:
             return None
@@ -879,6 +890,17 @@ class PrinterAgent:
             return await self._status_moonraker(printer)
         else:
             return None
+
+    def _print_status_from_simulation(self, status: Dict[str, Any]) -> PrintStatus:
+        return PrintStatus(
+            printer=status["printer"],
+            state=status["state"],
+            progress_percent=status["progress_percent"],
+            time_remaining=status.get("time_remaining"),
+            time_elapsed=status.get("time_elapsed"),
+            filename=status.get("filename"),
+            temperatures=status.get("temperatures"),
+        )
             
     async def _status_octoprint(self, printer: Printer) -> Optional[PrintStatus]:
         """Get status from OctoPrint."""
@@ -1001,6 +1023,57 @@ class PrinterAgent:
         h, m = divmod(m, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    async def pause_print(self, target: str) -> Dict[str, Any]:
+        if self.simulation_manager.is_printer_enabled():
+            status = await self.printer_simulator.pause_print(target)
+            return {"success": bool(status), "status": status}
+        return await self._send_print_control(target, "pause")
+
+    async def resume_print(self, target: str) -> Dict[str, Any]:
+        if self.simulation_manager.is_printer_enabled():
+            status = await self.printer_simulator.resume_print(target)
+            return {"success": bool(status), "status": status}
+        return await self._send_print_control(target, "resume")
+
+    async def cancel_print(self, target: str) -> Dict[str, Any]:
+        if self.simulation_manager.is_printer_enabled():
+            status = await self.printer_simulator.cancel_print(target)
+            return {"success": bool(status), "status": status}
+        return await self._send_print_control(target, "cancel")
+
+    async def _send_print_control(self, target: str, action: str) -> Dict[str, Any]:
+        printer = self._resolve_printer(target)
+        if not printer:
+            return {"success": False, "message": f"Printer '{target}' not found."}
+
+        headers = {}
+        if printer.api_key:
+            headers["X-Api-Key"] = printer.api_key
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                if printer.printer_type == PrinterType.OCTOPRINT:
+                    payload = {"command": action}
+                    if action in {"pause", "resume"}:
+                        payload = {"command": "pause", "action": action}
+                    url = f"http://{printer.host}:{printer.port}/api/job"
+                    async with session.post(url, json=payload, headers=headers) as resp:
+                        return {"success": resp.status in {200, 202, 204}, "status_code": resp.status}
+
+                if printer.printer_type == PrinterType.MOONRAKER:
+                    endpoint = {
+                        "pause": "pause",
+                        "resume": "resume",
+                        "cancel": "cancel",
+                    }[action]
+                    url = f"http://{printer.host}:{printer.port}/printer/print/{endpoint}"
+                    async with session.post(url) as resp:
+                        return {"success": resp.status in {200, 202, 204}, "status_code": resp.status}
+        except Exception as exc:
+            return {"success": False, "message": str(exc)}
+
+        return {"success": False, "message": f"Action '{action}' is not available for this printer type."}
+
 
     async def print_stl(self, stl_path: str, printer_name: str, 
                         profile_path: Optional[str] = None, 
@@ -1008,6 +1081,20 @@ class PrinterAgent:
         """
         Orchestrate the full printing workflow: Slice -> Upload -> Print.
         """
+        if self.simulation_manager.is_printer_enabled():
+            filename = os.path.splitext(os.path.basename(stl_path or ""))[0] or "jarvis_demo_part"
+            if not filename.endswith(".gcode"):
+                filename = f"{filename}.gcode"
+            status = await self.printer_simulator.start_demo_print(printer_name, filename=filename)
+            if not status:
+                return {"status": "error", "success": False, "message": f"Printer '{printer_name}' not found in demo mode."}
+            return {
+                "status": "success",
+                "success": True,
+                "message": f"Demo print started on {status['printer']}.",
+                "printer": status["printer"],
+            }
+
         print(f"[PRINTER] Starting print job for {stl_path} on {printer_name}")
         
         # 1. Resolve Printer
@@ -1031,9 +1118,9 @@ class PrinterAgent:
         success = await self.upload_gcode(printer_name, gcode_path, start_print=True)
         
         if success:
-            return {"status": "success", "message": f"Printing {os.path.basename(stl_path)} on {printer.name}"}
+            return {"status": "success", "success": True, "message": f"Printing {os.path.basename(stl_path)} on {printer.name}"}
         else:
-            return {"status": "error", "message": "Failed to upload/start print job."}
+            return {"status": "error", "success": False, "message": "Failed to upload/start print job."}
 
 
 # Standalone test

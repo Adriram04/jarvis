@@ -17,6 +17,9 @@ import time
 
 from google import genai
 from google.genai import types
+from simulation_manager import simulation_manager
+from simulators.kasa_simulator import kasa_simulator
+from simulators.printer_simulator import printer_simulator
 
 if sys.version_info < (3, 11, 0):
     import taskgroup, exceptiongroup
@@ -126,7 +129,7 @@ list_projects_tool = {
 
 list_smart_devices_tool = {
     "name": "list_smart_devices",
-    "description": "Lists all available smart home devices (lights, plugs, etc.) on the network.",
+    "description": "Discovers and lists all available smart home devices (Kasa lights, plugs, strips, etc.). Use this for 'detecta dispositivos Kasa'.",
     "parameters": {
         "type": "OBJECT",
         "properties": {},
@@ -141,7 +144,7 @@ control_light_tool = {
         "properties": {
             "target": {
                 "type": "STRING",
-                "description": "The IP address of the device to control. Always prefer the IP address over the alias for reliability."
+                "description": "The IP address or alias of the device to control. In demo mode aliases like 'Luz escritorio demo' are valid."
             },
             "action": {
                 "type": "STRING",
@@ -171,15 +174,15 @@ discover_printers_tool = {
 
 print_stl_tool = {
     "name": "print_stl",
-    "description": "Prints an STL file to a 3D printer. Handles slicing the STL to G-code and uploading to the printer.",
+    "description": "Prints an STL file to a 3D printer. In demo simulation mode, use this to start a test/demo print on the requested printer.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "stl_path": {"type": "STRING", "description": "Path to STL file, or 'current' for the most recent CAD model."},
+            "stl_path": {"type": "STRING", "description": "Optional path to STL file, or 'current' for the most recent CAD model. In demo mode this can be omitted."},
             "printer": {"type": "STRING", "description": "Printer name or IP address."},
             "profile": {"type": "STRING", "description": "Optional slicer profile name."}
         },
-        "required": ["stl_path", "printer"]
+        "required": ["printer"]
     }
 }
 
@@ -192,6 +195,48 @@ get_print_status_tool = {
             "printer": {"type": "STRING", "description": "Printer name or IP address."}
         },
         "required": ["printer"]
+    }
+}
+
+pause_print_tool = {
+    "name": "pause_print",
+    "description": "Pauses the active print job on a 3D printer. Use this for requests like 'pause the print' or 'pausa la impresion'.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "printer": {
+                "type": "STRING",
+                "description": "Optional printer name or IP address. If omitted, Jarvis will use the current active printer when it can infer one."
+            }
+        },
+    }
+}
+
+resume_print_tool = {
+    "name": "resume_print",
+    "description": "Resumes a paused 3D printer job. Use this for requests like 'resume the print' or 'reanuda la impresion'.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "printer": {
+                "type": "STRING",
+                "description": "Optional printer name or IP address. If omitted, Jarvis will use the current active printer when it can infer one."
+            }
+        },
+    }
+}
+
+cancel_print_tool = {
+    "name": "cancel_print",
+    "description": "Cancels the active print job on a 3D printer. Use this for requests like 'cancel the print' or 'cancela la impresion'.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "printer": {
+                "type": "STRING",
+                "description": "Optional printer name or IP address. If omitted, Jarvis will use the current active printer when it can infer one."
+            }
+        },
     }
 }
 
@@ -208,7 +253,34 @@ iterate_cad_tool = {
     "behavior": "NON_BLOCKING"
 }
 
-tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, iterate_cad_tool] + tools_list[0]['function_declarations'][1:]}]
+activate_simulation_mode_tool = {
+    "name": "activate_simulation_mode",
+    "description": "Activates the global demo simulation mode for Kasa devices and 3D printers.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {},
+    }
+}
+
+deactivate_simulation_mode_tool = {
+    "name": "deactivate_simulation_mode",
+    "description": "Deactivates the global demo simulation mode and returns to real hardware when available.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {},
+    }
+}
+
+get_simulation_status_tool = {
+    "name": "get_simulation_status",
+    "description": "Gets whether the global demo simulation mode is active.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {},
+    }
+}
+
+tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool] + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
 config = types.LiveConnectConfig(
@@ -224,6 +296,9 @@ config = types.LiveConnectConfig(
         "For camera or image questions, call inspect_camera first and base your answer only on that result. "
         "This includes Spanish requests like 'que ves', 'que estas viendo', 'que es este objeto', or 'describe la imagen'. "
         "Do not invent visual details that are not in the camera analysis. "
+        "For Spanish requests such as 'activa el modo simulacion', 'activa la simulacion', 'modo demo', or 'activa modo demo', call activate_simulation_mode. "
+        "For 'desactiva el modo simulacion', 'desactivar simulacion', or 'desactiva modo demo', call deactivate_simulation_mode. "
+        "For print control requests such as 'pausa la impresion', 'reanuda la impresion', or 'cancela la impresion', call pause_print, resume_print, or cancel_print. "
         "Your creator is Adrián, and you address him as 'Sir'. "
         "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
         "You have a fun personality.",
@@ -245,7 +320,7 @@ from kasa_agent import KasaAgent
 from printer_agent import PrinterAgent
 
 class AudioLoop:
-    def __init__(self, video_mode=DEFAULT_MODE, on_audio_data=None, on_video_frame=None, on_cad_data=None, on_web_data=None, on_transcription=None, on_tool_confirmation=None, on_cad_status=None, on_cad_thought=None, on_project_update=None, on_device_update=None, on_error=None, input_device_index=None, input_device_name=None, output_device_index=None, kasa_agent=None):
+    def __init__(self, video_mode=DEFAULT_MODE, on_audio_data=None, on_video_frame=None, on_cad_data=None, on_web_data=None, on_transcription=None, on_tool_confirmation=None, on_cad_status=None, on_cad_thought=None, on_project_update=None, on_device_update=None, on_simulation_update=None, on_error=None, input_device_index=None, input_device_name=None, output_device_index=None, kasa_agent=None):
         self.video_mode = video_mode
         self.on_audio_data = on_audio_data
         self.on_video_frame = on_video_frame
@@ -257,6 +332,7 @@ class AudioLoop:
         self.on_cad_thought = on_cad_thought
         self.on_project_update = on_project_update
         self.on_device_update = on_device_update
+        self.on_simulation_update = on_simulation_update
         self.on_error = on_error
         self.input_device_index = input_device_index
         self.input_device_name = input_device_name
@@ -742,7 +818,32 @@ class AudioLoop:
             except Exception:
                 pass
 
+    async def _infer_active_printer_target(self):
+        active_states = {"printing", "heating", "paused"}
 
+        if simulation_manager.is_printer_enabled():
+            statuses = printer_simulator.get_all_printer_states()
+            for status in statuses:
+                state = str(status.get("state", "")).lower()
+                if state in active_states:
+                    return status.get("host") or status.get("printer")
+            return statuses[0].get("host") if len(statuses) == 1 else None
+
+        printers = list(getattr(self.printer_agent, "printers", {}).values())
+        if len(printers) == 1:
+            return printers[0].host
+
+        for printer in printers:
+            try:
+                status = await self.printer_agent.get_print_status(printer.host)
+            except Exception:
+                continue
+
+            state = str(getattr(status, "state", "")).lower() if status else ""
+            if state in active_states or "print" in state:
+                return printer.host
+
+        return None
 
     async def handle_write_file(self, path, content):
         print(f"[JARVIS DEBUG] [FS] Writing file: '{path}'")
@@ -1013,7 +1114,7 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
+                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status"]:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
                                 
                                 # Check Permissions (Default to True if not set)
@@ -1210,49 +1311,55 @@ class AudioLoop:
                                     )
                                     function_responses.append(function_response)
 
+                                elif fc.name == "activate_simulation_mode":
+                                    simulation_manager.activate_all()
+                                    kasa_simulator.reset()
+                                    printer_simulator.reset()
+                                    result_str = "Modo simulacion activado. A partir de ahora usare dispositivos Kasa e impresoras 3D simuladas."
+                                    if self.on_simulation_update:
+                                        self.on_simulation_update(result_str)
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "deactivate_simulation_mode":
+                                    simulation_manager.deactivate_all()
+                                    result_str = "Modo simulacion desactivado. Volvere a usar dispositivos reales si estan disponibles."
+                                    if self.on_simulation_update:
+                                        self.on_simulation_update(result_str)
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "get_simulation_status":
+                                    state = simulation_manager.get_state()
+                                    result_str = f"Simulation mode: {state['simulation_mode']}. Kasa: {state['kasa_simulation']}. Printers: {state['printer_simulation']}."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
                                 elif fc.name == "list_smart_devices":
                                     print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'list_smart_devices'")
-                                    # Use cached devices directly for speed
-                                    # devices_dict is {ip: SmartDevice}
-                                    
+                                    frontend_list = await self.kasa_agent.discover_devices()
                                     dev_summaries = []
-                                    frontend_list = []
-                                    
-                                    for ip, d in self.kasa_agent.devices.items():
-                                        dev_type = "unknown"
-                                        if d.is_bulb: dev_type = "bulb"
-                                        elif d.is_plug: dev_type = "plug"
-                                        elif d.is_strip: dev_type = "strip"
-                                        elif d.is_dimmer: dev_type = "dimmer"
-                                        
-                                        # Format for Model
-                                        info = f"{d.alias} (IP: {ip}, Type: {dev_type})"
-                                        if d.is_on:
-                                            info += " [ON]"
-                                        else:
-                                            info += " [OFF]"
-                                        dev_summaries.append(info)
-                                        
-                                        # Format for Frontend
-                                        frontend_list.append({
-                                            "ip": ip,
-                                            "alias": d.alias,
-                                            "model": d.model,
-                                            "type": dev_type,
-                                            "is_on": d.is_on,
-                                            "brightness": d.brightness if d.is_bulb or d.is_dimmer else None,
-                                            "hsv": d.hsv if d.is_bulb and d.is_color else None,
-                                            "has_color": d.is_color if d.is_bulb else False,
-                                            "has_brightness": d.is_dimmable if d.is_bulb or d.is_dimmer else False
-                                        })
-                                    
+                                    for d in frontend_list:
+                                        state_text = "ON" if d.get("is_on") else "OFF"
+                                        dev_summaries.append(
+                                            f"{d.get('alias')} (IP: {d.get('ip')}, Type: {d.get('type')}, Model: {d.get('model')}) [{state_text}]"
+                                        )
+
                                     result_str = "No devices found in cache."
                                     if dev_summaries:
-                                        result_str = "Found Devices (Cached):\n" + "\n".join(dev_summaries)
+                                        result_str = "Found Devices:\n" + "\n".join(dev_summaries)
                                     
                                     # Trigger frontend update
                                     if self.on_device_update:
                                         self.on_device_update(frontend_list)
+                                    if simulation_manager.is_kasa_enabled() and self.on_simulation_update:
+                                        self.on_simulation_update("Detectados dispositivos Kasa simulados")
 
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": result_str}
@@ -1279,55 +1386,30 @@ class AudioLoop:
                                         if success:
                                             result_msg = f"Turned OFF '{target}'."
                                     elif action == "set":
-                                        success = True
                                         result_msg = f"Updated '{target}':"
                                     
                                     # Apply extra attributes if 'set' or if we just turned it on and want to set them too
                                     if success or action == "set":
                                         if brightness is not None:
                                             sb = await self.kasa_agent.set_brightness(target, brightness)
+                                            success = success or sb
                                             if sb:
                                                 result_msg += f" Set brightness to {brightness}."
                                         if color is not None:
                                             sc = await self.kasa_agent.set_color(target, color)
+                                            success = success or sc
                                             if sc:
                                                 result_msg += f" Set color to {color}."
+                                        if action == "set" and not success:
+                                            result_msg = f"Could not update '{target}'."
 
                                     # Notify Frontend of State Change
                                     if success:
-                                        # We don't need full discovery, just refresh known state or push update
-                                        # But for simplicity, let's get the standard list representation
-                                        # KasaAgent updates its internal state on control, so we can rebuild the list
-                                        
-                                        # Quick rebuild of list from internal dict
-                                        updated_list = []
-                                        for ip, dev in self.kasa_agent.devices.items():
-                                            # We need to ensure we have the correct dict structure expected by frontend
-                                            # We duplicate logic from KasaAgent.discover_devices a bit, but that's okay for now or we can add a helper
-                                            # Ideally KasaAgent has a 'get_devices_list()' method.
-                                            # Use the cached objects in self.kasa_agent.devices
-                                            
-                                            dev_type = "unknown"
-                                            if dev.is_bulb: dev_type = "bulb"
-                                            elif dev.is_plug: dev_type = "plug"
-                                            elif dev.is_strip: dev_type = "strip"
-                                            elif dev.is_dimmer: dev_type = "dimmer"
-
-                                            d_info = {
-                                                "ip": ip,
-                                                "alias": dev.alias,
-                                                "model": dev.model,
-                                                "type": dev_type,
-                                                "is_on": dev.is_on,
-                                                "brightness": dev.brightness if dev.is_bulb or dev.is_dimmer else None,
-                                                "hsv": dev.hsv if dev.is_bulb and dev.is_color else None,
-                                                "has_color": dev.is_color if dev.is_bulb else False,
-                                                "has_brightness": dev.is_dimmable if dev.is_bulb or dev.is_dimmer else False
-                                            }
-                                            updated_list.append(d_info)
-                                            
+                                        updated_list = self.kasa_agent.get_all_states()
                                         if self.on_device_update:
                                             self.on_device_update(updated_list)
+                                        if simulation_manager.is_kasa_enabled() and self.on_simulation_update:
+                                            self.on_simulation_update(kasa_simulator.last_operation_message)
                                     else:
                                         # Report Error
                                         if self.on_error:
@@ -1341,6 +1423,8 @@ class AudioLoop:
                                 elif fc.name == "discover_printers":
                                     print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'discover_printers'")
                                     printers = await self.printer_agent.discover_printers()
+                                    if simulation_manager.is_printer_enabled() and self.on_simulation_update:
+                                        self.on_simulation_update("Detectadas impresoras simuladas")
                                     # Format for model
                                     if printers:
                                         printer_list = []
@@ -1356,7 +1440,7 @@ class AudioLoop:
                                     function_responses.append(function_response)
 
                                 elif fc.name == "print_stl":
-                                    stl_path = fc.args["stl_path"]
+                                    stl_path = fc.args.get("stl_path", "jarvis_demo_part")
                                     printer = fc.args["printer"]
                                     profile = fc.args.get("profile")
                                     
@@ -1376,7 +1460,9 @@ class AudioLoop:
                                         root_path=project_path
                                     )
                                     result_str = result.get("message", "Unknown result")
-                                    
+                                    if simulation_manager.is_printer_enabled() and self.on_simulation_update:
+                                        self.on_simulation_update(result_str)
+                                     
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
@@ -1406,6 +1492,47 @@ class AudioLoop:
                                     else:
                                         result_str = f"Could not get status for printer '{printer}'. Ensure it is discovered first."
                                     
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name in ["pause_print", "resume_print", "cancel_print"]:
+                                    printer = fc.args.get("printer") or await self._infer_active_printer_target()
+                                    action_names = {
+                                        "pause_print": ("pause", "paused"),
+                                        "resume_print": ("resume", "resumed"),
+                                        "cancel_print": ("cancel", "cancelled"),
+                                    }
+                                    action, past_tense = action_names[fc.name]
+
+                                    if not printer:
+                                        result_str = f"Could not {action} the print because no active printer could be inferred. Ask the user which printer to use."
+                                    else:
+                                        print(f"[JARVIS DEBUG] [TOOL] Tool Call: '{fc.name}' Printer='{printer}'")
+                                        if fc.name == "pause_print":
+                                            result = await self.printer_agent.pause_print(printer)
+                                        elif fc.name == "resume_print":
+                                            result = await self.printer_agent.resume_print(printer)
+                                        else:
+                                            result = await self.printer_agent.cancel_print(printer)
+
+                                        if result.get("success"):
+                                            result_str = f"Print on '{printer}' {past_tense}."
+                                            status = result.get("status")
+                                            if isinstance(status, dict):
+                                                state = status.get("state")
+                                                progress = status.get("progress_percent")
+                                                if state:
+                                                    result_str += f" State: {state}."
+                                                if progress is not None:
+                                                    result_str += f" Progress: {float(progress):.1f}%."
+                                        else:
+                                            result_str = result.get("message") or f"Could not {action} the print on '{printer}'. Ensure it is discovered and currently available."
+
+                                    if simulation_manager.is_printer_enabled() and self.on_simulation_update:
+                                        self.on_simulation_update(result_str)
+
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )

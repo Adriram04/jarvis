@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mic, MicOff, Settings, Power, Video, VideoOff, Hand, Lightbulb, Printer, Globe, Box } from 'lucide-react';
+import { Activity, Mic, MicOff, Settings, Power, Video, VideoOff, Hand, Lightbulb, Printer, Globe, Box } from 'lucide-react';
 
 const ToolsModule = ({
     isConnected,
@@ -17,6 +17,8 @@ const ToolsModule = ({
     showKasaWindow,
     onTogglePrinter,
     showPrinterWindow,
+    onToggleSimulation,
+    showSimulationDashboard,
     onToggleCad,
     showCadWindow,
     onToggleBrowser,
@@ -118,6 +120,17 @@ const ToolsModule = ({
                         } `}
                 >
                     <Printer size={24} />
+                </button>
+
+                <button
+                    onClick={onToggleSimulation}
+                    className={`p-3 rounded-full border-2 transition-all duration-300 ${showSimulationDashboard
+                        ? 'border-green-300 bg-green-300/10 text-green-300 hover:bg-green-300/20'
+                        : 'border-cyan-900 text-cyan-700 hover:border-green-400 hover:text-green-400'
+                        } `}
+                    title="Simulation Dashboard"
+                >
+                    <Activity size={24} />
                 </button>
 
                 {/* CAD Agent Toggle */}

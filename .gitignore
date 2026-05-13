@@ -10,6 +10,7 @@ env/
 # JARVIS Specific Local Data
 backend/reference.jpg
 backend/settings.json
+backend/demo_state/
 backend/last_cad_generation.json
 backend/face_detection_yunet_*.onnx
 backend/face_recognition_sface_*.onnx

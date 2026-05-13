@@ -100,6 +100,23 @@ class TestToolDefinitions:
         assert discover_printers_tool['name'] == 'discover_printers'
         assert 'description' in discover_printers_tool
         print(f"discover_printers tool: {discover_printers_tool['name']}")
+
+    def test_print_control_tool_schemas(self):
+        """Test print pause/resume/cancel tools have correct schemas."""
+        from jarvis import pause_print_tool, resume_print_tool, cancel_print_tool
+
+        tools = [
+            (pause_print_tool, 'pause_print'),
+            (resume_print_tool, 'resume_print'),
+            (cancel_print_tool, 'cancel_print'),
+        ]
+
+        for tool, name in tools:
+            assert tool['name'] == name
+            assert 'description' in tool
+            assert 'parameters' in tool
+            assert 'printer' in tool['parameters']['properties']
+            print(f"print control tool: {tool['name']}")
     
     def test_list_smart_devices_tool_schema(self):
         """Test list_smart_devices tool has correct schema."""

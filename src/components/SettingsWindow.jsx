@@ -18,7 +18,13 @@ const TOOLS = [
     { id: 'control_light', label: 'Control Light' },
     { id: 'discover_printers', label: 'Discover Printers' },
     { id: 'print_stl', label: 'Print 3D Model' },
+    { id: 'pause_print', label: 'Pause Print' },
+    { id: 'resume_print', label: 'Resume Print' },
+    { id: 'cancel_print', label: 'Cancel Print' },
     { id: 'iterate_cad', label: 'Iterate CAD' },
+    { id: 'activate_simulation_mode', label: 'Activate Simulation' },
+    { id: 'deactivate_simulation_mode', label: 'Deactivate Simulation' },
+    { id: 'get_simulation_status', label: 'Simulation Status' },
 ];
 
 const SettingsWindow = ({

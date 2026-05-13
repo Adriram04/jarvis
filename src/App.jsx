@@ -15,6 +15,7 @@ import AuthLock from './components/AuthLock';
 import KasaWindow from './components/KasaWindow';
 import PrinterWindow from './components/PrinterWindow';
 import SettingsWindow from './components/SettingsWindow';
+import SimulationDashboard from './components/SimulationDashboard';
 
 
 
@@ -60,6 +61,8 @@ function App() {
     const [showPrinterWindow, setShowPrinterWindow] = useState(false);
     const [showCadWindow, setShowCadWindow] = useState(false);
     const [showBrowserWindow, setShowBrowserWindow] = useState(false);
+    const [showSimulationDashboard, setShowSimulationDashboard] = useState(false);
+    const [simulationState, setSimulationState] = useState({ simulation_mode: false, kasa_simulation: false, printer_simulation: false });
 
     // Printing workflow status (for top toolbar display)
     const [slicingStatus, setSlicingStatus] = useState({ active: false, percent: 0, message: '' });
@@ -95,6 +98,7 @@ function App() {
         browser: { x: window.innerWidth / 2 - 300, y: window.innerHeight / 2 },
         kasa: { x: window.innerWidth / 2 + 350, y: window.innerHeight / 2 - 100 },
         printer: { x: window.innerWidth / 2 - 350, y: window.innerHeight / 2 - 100 },
+        simulation: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
         tools: { x: window.innerWidth / 2, y: window.innerHeight - 100 } // Fixed bottom OFFSET
     });
 
@@ -106,13 +110,14 @@ function App() {
         browser: { w: 550, h: 380 },
         video: { w: 320, h: 180 },
         kasa: { w: 300, h: 380 }, // Approx
-        printer: { w: 380, h: 380 } // Approx
+        printer: { w: 380, h: 380 }, // Approx
+        simulation: { w: 780, h: 620 }
     });
     const [activeDragElement, setActiveDragElement] = useState(null);
 
     // Z-Index Stacking Order (last element = highest z-index)
     const [zIndexOrder, setZIndexOrder] = useState([
-        'visualizer', 'chat', 'tools', 'video', 'cad', 'browser', 'kasa', 'printer'
+        'visualizer', 'chat', 'tools', 'video', 'cad', 'browser', 'kasa', 'printer', 'simulation'
     ]);
 
     // Hand Control State
@@ -534,6 +539,13 @@ function App() {
             setPrinterCount(list.length);
         });
 
+        socket.on('simulation_status', (state) => {
+            setSimulationState(state || { simulation_mode: false, kasa_simulation: false, printer_simulation: false });
+            if (state?.simulation_mode) {
+                setShowSimulationDashboard(true);
+            }
+        });
+
         // Slicing progress for top toolbar
         socket.on('slicing_progress', (data) => {
             console.log('[SLICING] Progress:', data);
@@ -651,6 +663,7 @@ function App() {
             socket.off('tool_confirmation_request');
             socket.off('kasa_devices');
             socket.off('printer_list');
+            socket.off('simulation_status');
             socket.off('slicing_progress');
             socket.off('print_status_update');
             socket.off('error');
@@ -1446,6 +1459,13 @@ function App() {
         setShowPrinterWindow(!showPrinterWindow);
     };
 
+    const toggleSimulationDashboard = () => {
+        setShowSimulationDashboard(!showSimulationDashboard);
+        if (!showSimulationDashboard) {
+            bringToFront('simulation');
+        }
+    };
+
     const openPrinterWindow = () => {
         setShowPrinterWindow(true);
         const size = elementSizes.printer || { w: 380, h: 380 };
@@ -1519,6 +1539,18 @@ function App() {
                     <div className="text-[10px] text-cyan-700 border border-cyan-900 px-1 rounded">
                         V2.0.0
                     </div>
+                    {simulationState.simulation_mode && (
+                        <button
+                            onClick={() => {
+                                setShowSimulationDashboard(true);
+                                bringToFront('simulation');
+                            }}
+                            style={{ WebkitAppRegion: 'no-drag' }}
+                            className="text-[10px] text-green-300 border border-green-400/30 bg-green-400/10 px-2 py-0.5 rounded ml-2"
+                        >
+                            SIMULATION ACTIVE
+                        </button>
+                    )}
                     {/* FPS Counter */}
                     {isVideoOn && (
                         <div className="text-[10px] text-green-500 border border-green-900 px-1 rounded ml-2">
@@ -1758,6 +1790,8 @@ function App() {
                         showKasaWindow={showKasaWindow}
                         onTogglePrinter={togglePrinterWindow}
                         showPrinterWindow={showPrinterWindow}
+                        onToggleSimulation={toggleSimulationDashboard}
+                        showSimulationDashboard={showSimulationDashboard}
                         onToggleCad={() => setShowCadWindow(!showCadWindow)}
                         showCadWindow={showCadWindow}
                         onToggleBrowser={() => setShowBrowserWindow(!showBrowserWindow)}
@@ -1792,6 +1826,16 @@ function App() {
                         activeDragElement={activeDragElement}
                         setActiveDragElement={setActiveDragElement}
                         zIndex={getZIndex('printer')}
+                    />
+                )}
+
+                {showSimulationDashboard && (
+                    <SimulationDashboard
+                        socket={socket}
+                        onClose={() => setShowSimulationDashboard(false)}
+                        position={elementPositions.simulation}
+                        onMouseDown={(e) => handleMouseDown(e, 'simulation')}
+                        zIndex={getZIndex('simulation')}
                     />
                 )}
 

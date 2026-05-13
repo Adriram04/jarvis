@@ -365,3 +365,33 @@ Este proyecto esta publicado bajo licencia MIT. Consulta [LICENSE](LICENSE) para
 ---
 
 Desarrollado por Adrian Ramirez Gil.
+
+## Modo simulación para defensa
+
+Para enseñar J.A.R.V.I.S sin depender de hardware real, el modo simulación se activa desde Jarvis diciendo:
+
+> "Jarvis, activa el modo simulación"
+
+También puede activarse desde el panel visual o mediante:
+
+```http
+POST /api/simulation/activate
+```
+
+Para desactivarlo:
+
+```http
+POST /api/simulation/deactivate
+```
+
+Este modo crea dispositivos Kasa e impresoras 3D simuladas. Sirve para mostrar detección, control, estados y progreso durante la exposición aunque no haya dispositivos físicos conectados.
+
+### Componentes simulados
+
+- Kasa:
+  - Luz escritorio demo.
+  - Enchufe impresora demo.
+  - Tira LED exposición.
+- Impresoras:
+  - Creality K1 Demo, Moonraker simulado.
+  - OctoPrint Demo, OctoPrint simulado.
