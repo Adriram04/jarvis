@@ -34,6 +34,10 @@ for import_path in (PROJECT_ROOT, BACKEND_DIR):
 import backend.jarvis as jarvis
 from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
+from integrations.openclaw_bridge import OpenClawBridge
+from openclaw_autopilot_manager import OpenClawAutopilotManager
+from pending_actions_manager import PendingActionsManager
+from permissions_manager import PermissionsManager
 from simulation_manager import simulation_manager
 from simulators.kasa_simulator import kasa_simulator
 from simulators.printer_simulator import printer_simulator
@@ -74,6 +78,17 @@ CAMERA_QUERY_PHRASES = [
 
 CAMERA_FOLLOWUP_PHRASES = {"y ahora", "ahora", "ahora?", "y ahora?", "ahora mismo", "mira ahora"}
 
+CAPABILITY_QUERY_PHRASES = [
+    "que puedes hacer",
+    "cuales son tus funcionalidades",
+    "que funciones tienes",
+    "en que me puedes ayudar",
+    "dime tus capacidades",
+    "que sabes hacer",
+    "tus capacidades",
+    "tus funcionalidades",
+]
+
 def _normalize_text_for_match(text):
     normalized = unicodedata.normalize("NFKD", text or "")
     without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
@@ -90,6 +105,22 @@ def _is_camera_question(text, loop=None):
             return True
 
     return False
+
+def _is_capability_question(text):
+    normalized = _normalize_text_for_match(text)
+    return any(phrase in normalized for phrase in CAPABILITY_QUERY_PHRASES)
+
+def _jarvis_capability_response():
+    return (
+        "Puedo ayudarte con varias areas: hablar contigo por voz, analizar lo que ve la camara, "
+        "generar modelos CAD, iterarlos, preparar impresiones 3D, controlar impresoras y usar "
+        "simulaciones para la defensa. Tambien puedo controlar dispositivos inteligentes Kasa, "
+        "gestionar proyectos y conservar memoria de trabajo. Si estan configuradas tus cuentas o "
+        "canales, tambien puedo ayudarte con mensajeria, respuestas automaticas autorizadas por "
+        "grupo o contacto, correo, calendario, publicaciones en redes sociales, workflows personales "
+        "y automatizaciones controladas. Para acciones sensibles, como enviar mensajes, publicar "
+        "contenido, crear invitaciones o cancelar eventos, te pedire confirmacion antes."
+    )
 
 SIMULATION_ACTIVATE_PHRASES = [
     "activa el modo simulacion",
@@ -170,8 +201,36 @@ audio_loop = None
 loop_task = None
 authenticator = None
 kasa_agent = KasaAgent()
+openclaw_bridge = OpenClawBridge()
+openclaw_permissions = PermissionsManager()
+pending_actions_manager = PendingActionsManager()
+openclaw_autopilot_manager = OpenClawAutopilotManager()
 SETTINGS_FILE = BACKEND_DIR / "settings.json"
 REFERENCE_IMAGE_FILE = BACKEND_DIR / "reference.jpg"
+
+OPENCLAW_TOOL_PERMISSION_DEFAULTS = {
+    "openclaw_check_status": False,
+    "openclaw_execute_action": False,
+    "openclaw_send_message": False,
+    "openclaw_read_conversation": False,
+    "openclaw_search_email": False,
+    "openclaw_draft_email": False,
+    "openclaw_send_email": False,
+    "openclaw_list_calendar_events": False,
+    "openclaw_calendar_action": False,
+    "openclaw_prepare_social_post": False,
+    "openclaw_schedule_social_post": False,
+    "openclaw_publish_social_post": False,
+    "openclaw_run_workflow": False,
+    "get_pending_actions": False,
+    "confirm_pending_action": False,
+    "cancel_pending_action": False,
+    "create_openclaw_autopilot_rule": False,
+    "list_openclaw_autopilot_rules": False,
+    "enable_openclaw_autopilot_rule": False,
+    "disable_openclaw_autopilot_rule": False,
+    "delete_openclaw_autopilot_rule": False,
+}
 
 DEFAULT_SETTINGS = {
     "face_auth_enabled": False, # Default OFF as requested
@@ -196,7 +255,8 @@ DEFAULT_SETTINGS = {
         "cancel_print": True,
         "activate_simulation_mode": False,
         "deactivate_simulation_mode": False,
-        "get_simulation_status": False
+        "get_simulation_status": False,
+        **OPENCLAW_TOOL_PERMISSION_DEFAULTS,
     },
     "printers": [], # List of {host, port, name, type}
     "kasa_devices": [], # List of {ip, alias, model}
@@ -413,6 +473,318 @@ async def api_simulation_printer_cancel(target: str):
         raise HTTPException(status_code=404, detail="Demo printer not found.")
     await emit_simulation_snapshot(f"Impresion cancelada en {status_data['printer']}")
     return status_data
+
+def _openclaw_local_result(action_type, summary, success=True, raw=None, warnings=None):
+    return {
+        "success": bool(success),
+        "service": "openclaw",
+        "action_type": action_type,
+        "summary": summary,
+        "raw": raw,
+        "external_id": None,
+        "warnings": warnings or [],
+    }
+
+def _env_bool(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+def _openclaw_human_summary(action_type, payload):
+    payload = payload or {}
+    if action_type in {"send_message", "send_whatsapp_message", "send_channel_message"}:
+        return f"Enviar mensaje a {payload.get('target')} por {payload.get('channel')}: {payload.get('message')}"
+    if action_type in {"send_email", "reply_email"}:
+        return f"Enviar correo: {payload.get('subject') or payload.get('to') or 'sin asunto'}"
+    if str(action_type).endswith("_calendar_event"):
+        return f"Ejecutar accion de calendario: {action_type}"
+    if action_type in {"schedule_social_post", "publish_social_post"}:
+        return f"Ejecutar accion de redes sociales: {action_type}"
+    if action_type == "run_workflow":
+        return f"Ejecutar workflow: {payload.get('workflow_name')}"
+    if action_type == "create_autopilot_rule":
+        return f"Crear regla automatica para {payload.get('channel')} -> {payload.get('target')} en modo {payload.get('mode')}"
+    if str(action_type).endswith("_autopilot_rule"):
+        return f"Modificar regla automatica: {action_type}"
+    return f"Ejecutar accion externa: {action_type}"
+
+def _public_openclaw_payload(payload):
+    return {key: value for key, value in dict(payload or {}).items() if not str(key).startswith("_")}
+
+async def _execute_openclaw_action(action_type, payload):
+    payload = dict(payload or {})
+    payload.setdefault("confirmed", True)
+    if action_type == "check_status":
+        return await openclaw_bridge.check_status()
+    result = await openclaw_bridge.execute_action(action_type, _public_openclaw_payload(payload))
+    rule_id = payload.get("_autopilot_rule_id")
+    if rule_id and result.get("success"):
+        openclaw_autopilot_manager.register_reply(rule_id)
+    return result
+
+async def _execute_or_queue_openclaw_action(action_type, payload, human_summary=None):
+    action_type = str(action_type or "").strip()
+    if not action_type:
+        return _openclaw_local_result(
+            "unknown",
+            "Falta action_type para ejecutar la accion externa.",
+            success=False,
+            warnings=["invalid_request"],
+        )
+
+    classification = openclaw_permissions.classify(action_type)
+    if classification == "forbidden":
+        return _openclaw_local_result(
+            action_type,
+            f"Accion bloqueada por seguridad: {openclaw_permissions.explain(action_type)}",
+            success=False,
+            warnings=["forbidden"],
+        )
+
+    if classification == "confirmation_required":
+        pending = pending_actions_manager.create_pending_action(
+            action_type,
+            payload or {},
+            human_summary or _openclaw_human_summary(action_type, payload or {}),
+        )
+        return _openclaw_local_result(
+            action_type,
+            f"Accion pendiente de confirmacion. ID: {pending['id']}",
+            success=False,
+            raw=pending,
+            warnings=["confirmation_required"],
+        )
+
+    return await _execute_openclaw_action(action_type, payload)
+
+async def _execute_confirmed_pending_action(action):
+    if not action:
+        return _openclaw_local_result(
+            "confirm_pending_action",
+            "No encuentro esa accion pendiente.",
+            success=False,
+            warnings=["not_found"],
+        )
+
+    action_type = action.get("action_type")
+    payload = action.get("payload") or {}
+
+    if action_type == "create_autopilot_rule":
+        rule = openclaw_autopilot_manager.create_rule(
+            payload.get("channel"),
+            payload.get("target"),
+            payload.get("mode"),
+            payload.get("trigger"),
+            payload.get("behavior"),
+        )
+        return _openclaw_local_result(action_type, "Regla de respuesta automatica creada.", raw=rule)
+
+    if action_type == "enable_autopilot_rule":
+        rule = openclaw_autopilot_manager.enable_rule(payload.get("rule_id"))
+        return _autopilot_mutation_result(action_type, rule, "activada")
+
+    if action_type == "disable_autopilot_rule":
+        rule = openclaw_autopilot_manager.disable_rule(payload.get("rule_id"))
+        return _autopilot_mutation_result(action_type, rule, "desactivada")
+
+    if action_type == "delete_autopilot_rule":
+        rule = openclaw_autopilot_manager.delete_rule(payload.get("rule_id"))
+        return _autopilot_mutation_result(action_type, rule, "eliminada")
+
+    return await _execute_openclaw_action(action_type, payload)
+
+def _autopilot_mutation_result(action_type, rule, label):
+    if not rule:
+        return _openclaw_local_result(action_type, "No encuentro esa regla.", success=False, warnings=["not_found"])
+    return _openclaw_local_result(action_type, f"Regla {label}.", raw=rule)
+
+def _create_openclaw_autopilot_rule_from_payload(data):
+    if not _env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
+        return _openclaw_local_result(
+            "create_autopilot_rule",
+            "Las respuestas automaticas externas no estan habilitadas.",
+            success=False,
+            warnings=["autopilot_disabled"],
+        )
+
+    mode = data.get("mode", "ask_before_send")
+    payload = {
+        "channel": data.get("channel"),
+        "target": data.get("target"),
+        "mode": mode,
+        "trigger": data.get("trigger") or {},
+        "behavior": data.get("behavior") or {},
+    }
+
+    if mode == "auto_send_limited":
+        pending = pending_actions_manager.create_pending_action(
+            "create_autopilot_rule",
+            payload,
+            _openclaw_human_summary("create_autopilot_rule", payload),
+        )
+        return _openclaw_local_result(
+            "create_autopilot_rule",
+            f"Regla pendiente de confirmacion antes de activar autoenvio. ID: {pending['id']}",
+            success=False,
+            raw=pending,
+            warnings=["confirmation_required"],
+        )
+
+    rule = openclaw_autopilot_manager.create_rule(
+        payload["channel"],
+        payload["target"],
+        payload["mode"],
+        payload["trigger"],
+        payload["behavior"],
+    )
+    return _openclaw_local_result("create_autopilot_rule", "Regla de respuesta automatica creada.", raw=rule)
+
+def _build_autopilot_reply(rule, incoming_message):
+    behavior = rule.get("behavior", {}) if isinstance(rule, dict) else {}
+    instruction = str(behavior.get("instruction") or "").strip()
+    message = str((incoming_message or {}).get("message") or "").lower()
+
+    if "manana a las 12" in _normalize_text_for_match(instruction):
+        return "La reunion sera manana a las 12."
+    if "ocupado" in _normalize_text_for_match(instruction):
+        return "Ahora mismo estoy ocupado. Te respondo en cuanto pueda."
+    if "reunion" in _normalize_text_for_match(message):
+        return "Gracias por preguntar. La reunion sigue segun lo previsto; si hay cambios, aviso."
+    return "Gracias por el mensaje. Lo reviso y respondo en cuanto pueda."
+
+def _create_pending_autopilot_reply(rule, incoming_message, reply_text, draft_only=False):
+    action_type = "draft_content" if draft_only else "send_message"
+    payload = {
+        "channel": incoming_message.get("channel"),
+        "target": incoming_message.get("target"),
+        "message": reply_text,
+        "conversation_id": incoming_message.get("conversation_id"),
+        "_autopilot_rule_id": rule.get("id"),
+    }
+    pending = pending_actions_manager.create_pending_action(
+        action_type,
+        payload,
+        f"Respuesta propuesta para {incoming_message.get('target')}: {reply_text}",
+    )
+    return pending
+
+@app.get("/api/openclaw/status")
+async def api_openclaw_status():
+    return await openclaw_bridge.check_status()
+
+@app.post("/api/openclaw/action")
+async def api_openclaw_action(data: dict = Body(default={})):
+    action_type = data.get("action_type") or data.get("type")
+    payload = data.get("payload") or {}
+    return await _execute_or_queue_openclaw_action(action_type, payload)
+
+@app.post("/api/openclaw/inbound")
+async def api_openclaw_inbound(data: dict = Body(default={})):
+    if not _env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
+        return {"matched": False, "message": "Las respuestas automaticas externas no estan habilitadas.", "results": []}
+
+    incoming_message = {
+        "channel": data.get("channel"),
+        "target": data.get("target"),
+        "sender": data.get("sender"),
+        "message": data.get("message"),
+        "conversation_id": data.get("conversation_id"),
+        "timestamp": data.get("timestamp") or datetime.now().isoformat(timespec="seconds"),
+    }
+    matches = openclaw_autopilot_manager.find_matching_rules(incoming_message)
+    if not matches:
+        return {"matched": False, "message": "No hay reglas activas para este evento.", "results": []}
+
+    results = []
+    for rule in matches:
+        reply_text = _build_autopilot_reply(rule, incoming_message)
+        mode = rule.get("mode")
+
+        if mode == "draft_only":
+            pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text, draft_only=True)
+            results.append({"rule_id": rule.get("id"), "mode": mode, "status": "draft_pending", "pending_action": pending})
+            continue
+
+        if mode == "ask_before_send":
+            pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text)
+            results.append({"rule_id": rule.get("id"), "mode": mode, "status": "confirmation_required", "pending_action": pending})
+            continue
+
+        if mode == "auto_send_limited":
+            first_reply_needs_confirmation = (
+                rule.get("behavior", {}).get("require_confirmation_for_first_reply", True)
+                and int(rule.get("reply_count_total", 0) or 0) == 0
+            )
+            if first_reply_needs_confirmation:
+                pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text)
+                results.append({"rule_id": rule.get("id"), "mode": mode, "status": "first_reply_confirmation_required", "pending_action": pending})
+                continue
+
+            if not openclaw_autopilot_manager.should_auto_reply(rule, incoming_message):
+                results.append({"rule_id": rule.get("id"), "mode": mode, "status": "blocked_by_rule_limits"})
+                continue
+
+            result = await openclaw_bridge.execute_autopilot_reply(
+                rule,
+                {**incoming_message, "reply": reply_text, "outgoing_message": reply_text},
+            )
+            if result.get("success"):
+                openclaw_autopilot_manager.register_reply(rule.get("id"))
+            results.append({"rule_id": rule.get("id"), "mode": mode, "status": "executed", "result": result})
+
+    return {"matched": True, "rules": matches, "results": results}
+
+@app.get("/api/pending-actions")
+async def api_pending_actions():
+    return {"actions": pending_actions_manager.get_pending_actions()}
+
+@app.post("/api/pending-actions/{action_id}/confirm")
+async def api_pending_action_confirm(action_id: str):
+    action = pending_actions_manager.confirm_action(action_id)
+    result = await _execute_confirmed_pending_action(action)
+    if action:
+        pending_actions_manager.mark_executed(action_id, result)
+    return result
+
+@app.post("/api/pending-actions/{action_id}/cancel")
+async def api_pending_action_cancel(action_id: str):
+    action = pending_actions_manager.cancel_action(action_id)
+    if not action:
+        return _openclaw_local_result("cancel_pending_action", "No encuentro esa accion pendiente.", success=False, warnings=["not_found"])
+    return _openclaw_local_result("cancel_pending_action", "Accion pendiente cancelada.", raw=action)
+
+@app.get("/api/openclaw/autopilot/rules")
+async def api_openclaw_autopilot_rules():
+    return {"rules": openclaw_autopilot_manager.list_rules()}
+
+@app.post("/api/openclaw/autopilot/rules")
+async def api_openclaw_autopilot_rules_create(data: dict = Body(default={})):
+    return _create_openclaw_autopilot_rule_from_payload(data)
+
+@app.post("/api/openclaw/autopilot/rules/{rule_id}/enable")
+async def api_openclaw_autopilot_rule_enable(rule_id: str):
+    return await _execute_or_queue_openclaw_action(
+        "enable_autopilot_rule",
+        {"rule_id": rule_id},
+        f"Activar regla automatica {rule_id}",
+    )
+
+@app.post("/api/openclaw/autopilot/rules/{rule_id}/disable")
+async def api_openclaw_autopilot_rule_disable(rule_id: str):
+    return await _execute_or_queue_openclaw_action(
+        "disable_autopilot_rule",
+        {"rule_id": rule_id},
+        f"Desactivar regla automatica {rule_id}",
+    )
+
+@app.delete("/api/openclaw/autopilot/rules/{rule_id}")
+async def api_openclaw_autopilot_rule_delete(rule_id: str):
+    return await _execute_or_queue_openclaw_action(
+        "delete_autopilot_rule",
+        {"rule_id": rule_id},
+        f"Eliminar regla automatica {rule_id}",
+    )
 
 @sio.event
 async def connect(sid, environ):
@@ -773,6 +1145,24 @@ async def user_input(sid, data):
         await sio.emit('transcription', {'sender': 'JARVIS', 'text': message})
         if audio_loop and audio_loop.project_manager:
             audio_loop.project_manager.log_chat("JARVIS", message)
+        return
+
+    if _is_capability_question(text):
+        message = _jarvis_capability_response()
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message})
+        if audio_loop and audio_loop.project_manager:
+            audio_loop.project_manager.log_chat("JARVIS", message)
+        if audio_loop and audio_loop.session:
+            try:
+                await audio_loop.session.send(
+                    input=(
+                        "System Notification: The user asked about Jarvis capabilities. "
+                        "The app answered directly without mentioning internal gateways, so do not answer this again."
+                    ),
+                    end_of_turn=False,
+                )
+            except Exception as e:
+                print(f"[SERVER DEBUG] Failed to sync capability answer to live session: {e}")
         return
 
     if not audio_loop:

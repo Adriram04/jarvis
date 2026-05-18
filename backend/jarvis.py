@@ -280,7 +280,84 @@ get_simulation_status_tool = {
     }
 }
 
-tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool] + tools_list[0]['function_declarations'][1:]}]
+def _openclaw_tool(name, description, properties=None, required=None):
+    tool = {
+        "name": name,
+        "description": description,
+        "parameters": {
+            "type": "OBJECT",
+            "properties": properties or {},
+        }
+    }
+    if required:
+        tool["parameters"]["required"] = required
+    return tool
+
+
+openclaw_tools = [
+    _openclaw_tool("openclaw_check_status", "Checks whether Jarvis external automation is enabled and reachable."),
+    _openclaw_tool(
+        "openclaw_execute_action",
+        "Executes a generic external automation action through Jarvis' internal gateway.",
+        {
+            "action_type": {"type": "STRING", "description": "Internal action type, such as search_items or draft_content."},
+            "payload": {"type": "OBJECT", "description": "Structured action payload."},
+        },
+        ["action_type", "payload"],
+    ),
+    _openclaw_tool(
+        "openclaw_send_message",
+        "Queues or sends a message to a configured messaging channel. Requires confirmation before sending.",
+        {
+            "channel": {"type": "STRING", "description": "Channel such as whatsapp, telegram, slack, or discord."},
+            "target": {"type": "STRING", "description": "Contact, group, channel, or conversation target."},
+            "message": {"type": "STRING", "description": "Message drafted by Jarvis."},
+        },
+        ["channel", "target", "message"],
+    ),
+    _openclaw_tool(
+        "openclaw_read_conversation",
+        "Reads recent messages from a configured conversation if available.",
+        {
+            "channel": {"type": "STRING"},
+            "target": {"type": "STRING"},
+            "limit": {"type": "INTEGER"},
+        },
+        ["channel", "target"],
+    ),
+    _openclaw_tool("openclaw_search_email", "Searches configured email through Jarvis external automation.", {"query": {"type": "STRING"}, "max_results": {"type": "INTEGER"}}, ["query"]),
+    _openclaw_tool("openclaw_draft_email", "Creates an email draft. Safe because it does not send.", {"payload": {"type": "OBJECT"}}, ["payload"]),
+    _openclaw_tool("openclaw_send_email", "Queues or sends an email-like action. Requires confirmation before sending.", {"payload": {"type": "OBJECT"}}, ["payload"]),
+    _openclaw_tool("openclaw_list_calendar_events", "Lists calendar events through configured calendar automation.", {"payload": {"type": "OBJECT"}}),
+    _openclaw_tool("openclaw_calendar_action", "Runs a calendar action such as create, update, delete, or list.", {"action": {"type": "STRING"}, "payload": {"type": "OBJECT"}}, ["action", "payload"]),
+    _openclaw_tool("openclaw_prepare_social_post", "Prepares or adapts social content without publishing.", {"payload": {"type": "OBJECT"}}, ["payload"]),
+    _openclaw_tool("openclaw_schedule_social_post", "Schedules a social post. Requires confirmation.", {"payload": {"type": "OBJECT"}}, ["payload"]),
+    _openclaw_tool("openclaw_publish_social_post", "Publishes a social post. Requires confirmation.", {"payload": {"type": "OBJECT"}}, ["payload"]),
+    _openclaw_tool("openclaw_run_workflow", "Runs a named configured workflow. Requires confirmation.", {"workflow_name": {"type": "STRING"}, "payload": {"type": "OBJECT"}}, ["workflow_name"]),
+    _openclaw_tool("get_pending_actions", "Lists actions waiting for user confirmation."),
+    _openclaw_tool("confirm_pending_action", "Confirms and executes a pending action.", {"action_id": {"type": "STRING"}}, ["action_id"]),
+    _openclaw_tool("cancel_pending_action", "Cancels a pending action without executing it.", {"action_id": {"type": "STRING"}}, ["action_id"]),
+    _openclaw_tool(
+        "create_openclaw_autopilot_rule",
+        "Creates a bounded automatic-reply rule for a specific channel and target.",
+        {
+            "channel": {"type": "STRING"},
+            "target": {"type": "STRING"},
+            "mode": {"type": "STRING", "description": "draft_only, ask_before_send, or auto_send_limited."},
+            "trigger": {"type": "OBJECT"},
+            "behavior": {"type": "OBJECT"},
+        },
+        ["channel", "target", "mode", "trigger", "behavior"],
+    ),
+    _openclaw_tool("list_openclaw_autopilot_rules", "Lists configured automatic-reply rules."),
+    _openclaw_tool("enable_openclaw_autopilot_rule", "Queues enabling an automatic-reply rule.", {"rule_id": {"type": "STRING"}}, ["rule_id"]),
+    _openclaw_tool("disable_openclaw_autopilot_rule", "Queues disabling an automatic-reply rule.", {"rule_id": {"type": "STRING"}}, ["rule_id"]),
+    _openclaw_tool("delete_openclaw_autopilot_rule", "Queues deleting an automatic-reply rule.", {"rule_id": {"type": "STRING"}}, ["rule_id"]),
+]
+
+OPENCLAW_TOOL_NAMES = {tool["name"] for tool in openclaw_tools}
+
+tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
 config = types.LiveConnectConfig(
@@ -299,6 +376,11 @@ config = types.LiveConnectConfig(
         "For Spanish requests such as 'activa el modo simulacion', 'activa la simulacion', 'modo demo', or 'activa modo demo', call activate_simulation_mode. "
         "For 'desactiva el modo simulacion', 'desactivar simulacion', or 'desactiva modo demo', call deactivate_simulation_mode. "
         "For print control requests such as 'pausa la impresion', 'reanuda la impresion', or 'cancela la impresion', call pause_print, resume_print, or cancel_print. "
+        "You can use OpenClaw only as an internal automation and external connectivity layer. OpenClaw never answers the user. You remain Jarvis: interpret intent, decide the action, draft content, apply permissions, ask for confirmation, and answer the user. "
+        "Do not implement or use direct integrations for Gmail, Calendar, WhatsApp Web, Instagram, LinkedIn, X/Twitter, Telegram, Slack, Discord, Notion, or GitHub; all external messaging, email, calendar, social, workflow, and skill actions must go through OpenClawBridge. "
+        "Never send messages, emails, posts, invitations, cancellations, or automatic replies without explicit user confirmation, unless there is a previously authorized limited autopilot rule. "
+        "Before sensitive actions, show the service or channel, recipient/group/platform, content, date/time if relevant, and exact action. After execution, answer in first person as Jarvis. Do not say that OpenClaw is speaking or quote OpenClaw as the final responder. "
+        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, messaging, authorized automatic replies, email, calendar, social posts, workflows, controlled automations, and pending confirmations. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
         "Your creator is Adrián, and you address him as 'Sir'. "
         "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
         "You have a fun personality.",
@@ -318,6 +400,10 @@ from cad_agent import CadAgent
 from web_agent import WebAgent, WebAgentQuotaError
 from kasa_agent import KasaAgent
 from printer_agent import PrinterAgent
+from integrations.openclaw_bridge import OpenClawBridge
+from permissions_manager import PermissionsManager
+from pending_actions_manager import PendingActionsManager
+from openclaw_autopilot_manager import OpenClawAutopilotManager
 
 class AudioLoop:
     def __init__(self, video_mode=DEFAULT_MODE, on_audio_data=None, on_video_frame=None, on_cad_data=None, on_web_data=None, on_transcription=None, on_tool_confirmation=None, on_cad_status=None, on_cad_thought=None, on_project_update=None, on_device_update=None, on_simulation_update=None, on_error=None, input_device_index=None, input_device_name=None, output_device_index=None, kasa_agent=None):
@@ -367,6 +453,10 @@ class AudioLoop:
         self.web_agent = WebAgent()
         self.kasa_agent = kasa_agent if kasa_agent else KasaAgent()
         self.printer_agent = PrinterAgent()
+        self.openclaw_bridge = OpenClawBridge()
+        self.openclaw_permissions = PermissionsManager()
+        self.pending_actions_manager = PendingActionsManager()
+        self.openclaw_autopilot_manager = OpenClawAutopilotManager()
 
         self.send_text_task = None
         self.stop_event = asyncio.Event()
@@ -1035,6 +1125,273 @@ class AudioLoop:
         except Exception as e:
              print(f"[JARVIS DEBUG] [ERR] Failed to send web agent result to model: {e}")
 
+    async def _handle_openclaw_tool_call(self, fc):
+        args = fc.args or {}
+        name = fc.name
+        print(f"[JARVIS DEBUG] [OPENCLAW] Tool Call: {name} Args={args}")
+
+        try:
+            if name == "openclaw_check_status":
+                result = await self.openclaw_bridge.check_status()
+            elif name == "get_pending_actions":
+                actions = self.pending_actions_manager.get_pending_actions()
+                result = self._openclaw_local_result(
+                    "get_pending_actions",
+                    f"{len(actions)} accion(es) pendiente(s).",
+                    raw=actions,
+                )
+            elif name == "confirm_pending_action":
+                result = await self._confirm_pending_openclaw_action(args.get("action_id"))
+            elif name == "cancel_pending_action":
+                result = self._cancel_pending_openclaw_action(args.get("action_id"))
+            elif name == "create_openclaw_autopilot_rule":
+                result = self._create_openclaw_autopilot_rule(args)
+            elif name == "list_openclaw_autopilot_rules":
+                rules = self.openclaw_autopilot_manager.list_rules()
+                result = self._openclaw_local_result(
+                    "get_autopilot_rules",
+                    f"{len(rules)} regla(s) de respuesta automatica configurada(s).",
+                    raw=rules,
+                )
+            elif name in {"enable_openclaw_autopilot_rule", "disable_openclaw_autopilot_rule", "delete_openclaw_autopilot_rule"}:
+                action_type = {
+                    "enable_openclaw_autopilot_rule": "enable_autopilot_rule",
+                    "disable_openclaw_autopilot_rule": "disable_autopilot_rule",
+                    "delete_openclaw_autopilot_rule": "delete_autopilot_rule",
+                }[name]
+                payload = {"rule_id": args.get("rule_id")}
+                result = self._queue_or_block_openclaw_action(action_type, payload, self._human_summary(action_type, payload))
+            else:
+                action_type, payload = self._openclaw_action_from_tool(name, args)
+                result = await self._execute_or_queue_openclaw_action(action_type, payload)
+        except Exception as exc:
+            result = self._openclaw_local_result(
+                name,
+                f"No he podido preparar la accion externa: {str(exc)[:200]}",
+                success=False,
+                warnings=["handler_error"],
+            )
+
+        return types.FunctionResponse(id=fc.id, name=fc.name, response={"result": result})
+
+    async def _execute_or_queue_openclaw_action(self, action_type, payload, human_summary=None):
+        action_type = str(action_type or "").strip()
+        if not action_type:
+            return self._openclaw_local_result(
+                "unknown",
+                "Falta action_type para ejecutar la accion externa.",
+                success=False,
+                warnings=["invalid_request"],
+            )
+
+        classification = self.openclaw_permissions.classify(action_type)
+        if classification == "forbidden":
+            return self._openclaw_local_result(
+                action_type,
+                f"Accion bloqueada por seguridad: {self.openclaw_permissions.explain(action_type)}",
+                success=False,
+                warnings=["forbidden"],
+            )
+
+        if classification == "confirmation_required":
+            return self._queue_or_block_openclaw_action(action_type, payload, human_summary)
+
+        result = await self._execute_openclaw_action(action_type, payload)
+        rule_id = (payload or {}).get("_autopilot_rule_id")
+        if rule_id and result.get("success"):
+            self.openclaw_autopilot_manager.register_reply(rule_id)
+        return result
+
+    def _queue_or_block_openclaw_action(self, action_type, payload, human_summary=None):
+        classification = self.openclaw_permissions.classify(action_type)
+        if classification == "forbidden":
+            return self._openclaw_local_result(
+                action_type,
+                f"Accion bloqueada por seguridad: {self.openclaw_permissions.explain(action_type)}",
+                success=False,
+                warnings=["forbidden"],
+            )
+
+        pending = self.pending_actions_manager.create_pending_action(
+            action_type,
+            payload or {},
+            human_summary or self._human_summary(action_type, payload or {}),
+        )
+        return self._openclaw_local_result(
+            action_type,
+            f"Accion pendiente de confirmacion: {pending['human_summary']}. ID: {pending['id']}",
+            success=False,
+            raw=pending,
+            warnings=["confirmation_required"],
+        )
+
+    async def _execute_openclaw_action(self, action_type, payload):
+        payload = dict(payload or {})
+        payload.setdefault("confirmed", True)
+        external_payload = {key: value for key, value in payload.items() if not str(key).startswith("_")}
+        return await self.openclaw_bridge.execute_action(action_type, external_payload)
+
+    async def _confirm_pending_openclaw_action(self, action_id):
+        action = self.pending_actions_manager.confirm_action(action_id)
+        if not action:
+            return self._openclaw_local_result(
+                "confirm_pending_action",
+                "No encuentro esa accion pendiente.",
+                success=False,
+                warnings=["not_found"],
+            )
+
+        action_type = action.get("action_type")
+        payload = action.get("payload") or {}
+        result = await self._execute_confirmed_pending_action(action_type, payload)
+        self.pending_actions_manager.mark_executed(action["id"], result)
+        return result
+
+    async def _execute_confirmed_pending_action(self, action_type, payload):
+        if action_type == "create_autopilot_rule":
+            rule = self.openclaw_autopilot_manager.create_rule(
+                payload.get("channel"),
+                payload.get("target"),
+                payload.get("mode"),
+                payload.get("trigger"),
+                payload.get("behavior"),
+            )
+            return self._openclaw_local_result(action_type, "Regla de respuesta automatica creada.", raw=rule)
+
+        if action_type == "enable_autopilot_rule":
+            rule = self.openclaw_autopilot_manager.enable_rule(payload.get("rule_id"))
+            return self._autopilot_rule_mutation_result(action_type, rule, "activada")
+
+        if action_type == "disable_autopilot_rule":
+            rule = self.openclaw_autopilot_manager.disable_rule(payload.get("rule_id"))
+            return self._autopilot_rule_mutation_result(action_type, rule, "desactivada")
+
+        if action_type == "delete_autopilot_rule":
+            rule = self.openclaw_autopilot_manager.delete_rule(payload.get("rule_id"))
+            return self._autopilot_rule_mutation_result(action_type, rule, "eliminada")
+
+        result = await self._execute_openclaw_action(action_type, payload)
+        rule_id = (payload or {}).get("_autopilot_rule_id")
+        if rule_id and result.get("success"):
+            self.openclaw_autopilot_manager.register_reply(rule_id)
+        return result
+
+    def _cancel_pending_openclaw_action(self, action_id):
+        action = self.pending_actions_manager.cancel_action(action_id)
+        if not action:
+            return self._openclaw_local_result(
+                "cancel_pending_action",
+                "No encuentro esa accion pendiente.",
+                success=False,
+                warnings=["not_found"],
+            )
+        return self._openclaw_local_result("cancel_pending_action", "Accion pendiente cancelada.", raw=action)
+
+    def _create_openclaw_autopilot_rule(self, args):
+        if not self._env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
+            return self._openclaw_local_result(
+                "create_autopilot_rule",
+                "Las respuestas automaticas externas no estan habilitadas.",
+                success=False,
+                warnings=["autopilot_disabled"],
+            )
+
+        mode = args.get("mode", "ask_before_send")
+        payload = {
+            "channel": args.get("channel"),
+            "target": args.get("target"),
+            "mode": mode,
+            "trigger": args.get("trigger") or {},
+            "behavior": args.get("behavior") or {},
+        }
+
+        if mode == "auto_send_limited":
+            return self._queue_or_block_openclaw_action(
+                "create_autopilot_rule",
+                payload,
+                self._human_summary("create_autopilot_rule", payload),
+            )
+
+        rule = self.openclaw_autopilot_manager.create_rule(
+            payload["channel"],
+            payload["target"],
+            payload["mode"],
+            payload["trigger"],
+            payload["behavior"],
+        )
+        return self._openclaw_local_result("create_autopilot_rule", "Regla de respuesta automatica creada.", raw=rule)
+
+    def _openclaw_action_from_tool(self, name, args):
+        if name == "openclaw_execute_action":
+            return args.get("action_type"), args.get("payload") or {}
+        if name == "openclaw_send_message":
+            return "send_message", {"channel": args.get("channel"), "target": args.get("target"), "message": args.get("message")}
+        if name == "openclaw_read_conversation":
+            return "read_conversation", {"channel": args.get("channel"), "target": args.get("target"), "limit": args.get("limit", 10)}
+        if name == "openclaw_search_email":
+            return "search_email", {"service": "email", "query": args.get("query"), "max_results": args.get("max_results", 10)}
+        if name == "openclaw_draft_email":
+            return "draft_email", args.get("payload") or {}
+        if name == "openclaw_send_email":
+            payload = args.get("payload") or {}
+            payload["action_type"] = payload.get("action_type", "send_email")
+            return payload["action_type"], payload
+        if name == "openclaw_list_calendar_events":
+            return "list_calendar_events", args.get("payload") or {}
+        if name == "openclaw_calendar_action":
+            action = str(args.get("action") or "").lower()
+            action_type = self.openclaw_bridge._calendar_action_type(action)
+            return action_type, {"calendar_action": action, "payload": args.get("payload") or {}}
+        if name == "openclaw_prepare_social_post":
+            return "prepare_social_post", args.get("payload") or {}
+        if name == "openclaw_schedule_social_post":
+            return "schedule_social_post", args.get("payload") or {}
+        if name == "openclaw_publish_social_post":
+            return "publish_social_post", args.get("payload") or {}
+        if name == "openclaw_run_workflow":
+            return "run_workflow", {"workflow_name": args.get("workflow_name"), "payload": args.get("payload") or {}}
+        return name, dict(args or {})
+
+    def _autopilot_rule_mutation_result(self, action_type, rule, label):
+        if not rule:
+            return self._openclaw_local_result(action_type, "No encuentro esa regla.", success=False, warnings=["not_found"])
+        return self._openclaw_local_result(action_type, f"Regla {label}.", raw=rule)
+
+    def _openclaw_local_result(self, action_type, summary, success=True, raw=None, warnings=None):
+        return {
+            "success": bool(success),
+            "service": "openclaw",
+            "action_type": action_type,
+            "summary": summary,
+            "raw": raw,
+            "external_id": None,
+            "warnings": warnings or [],
+        }
+
+    def _human_summary(self, action_type, payload):
+        payload = payload or {}
+        if action_type in {"send_message", "send_whatsapp_message", "send_channel_message"}:
+            return f"Enviar mensaje a {payload.get('target')} por {payload.get('channel')}: {payload.get('message')}"
+        if action_type in {"send_email", "reply_email"}:
+            return f"Enviar correo: {payload.get('subject') or payload.get('to') or 'sin asunto'}"
+        if action_type.endswith("_calendar_event"):
+            return f"Ejecutar accion de calendario: {action_type}"
+        if action_type in {"schedule_social_post", "publish_social_post"}:
+            return f"Ejecutar accion de redes sociales: {action_type}"
+        if action_type == "run_workflow":
+            return f"Ejecutar workflow: {payload.get('workflow_name')}"
+        if action_type == "create_autopilot_rule":
+            return f"Crear regla automatica para {payload.get('channel')} -> {payload.get('target')} en modo {payload.get('mode')}"
+        if action_type.endswith("_autopilot_rule"):
+            return f"Modificar regla automatica: {action_type}"
+        return f"Ejecutar accion externa: {action_type}"
+
+    def _env_bool(self, name, default=False):
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
     async def receive_audio(self):
         "Background task to reads from the websocket and write pcm chunks to the output queue"
         try:
@@ -1120,7 +1477,7 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status"]:
+                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status"] or fc.name in OPENCLAW_TOOL_NAMES:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
                                 
                                 # Check Permissions (Default to True if not set)
@@ -1542,6 +1899,10 @@ class AudioLoop:
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
+                                    function_responses.append(function_response)
+
+                                elif fc.name in OPENCLAW_TOOL_NAMES:
+                                    function_response = await self._handle_openclaw_tool_call(fc)
                                     function_responses.append(function_response)
 
                                 elif fc.name == "iterate_cad":

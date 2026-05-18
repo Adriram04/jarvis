@@ -145,6 +145,15 @@ JARVIS_CAD_FALLBACK_MODELS=gemini-2.5-flash-lite
 JARVIS_CAD_SCRIPT_TIMEOUT_SECONDS=30
 # Opcional: limite de ejecucion para OrcaSlicer/PrusaSlicer.
 JARVIS_SLICER_TIMEOUT_SECONDS=300
+
+# Opcional: gateway interno para automatizacion externa.
+JARVIS_OPENCLAW_ENABLED=false
+JARVIS_OPENCLAW_MODE=cli
+JARVIS_OPENCLAW_EXECUTABLE=openclaw
+JARVIS_OPENCLAW_BASE_URL=http://localhost:18789
+JARVIS_OPENCLAW_TIMEOUT_SECONDS=60
+JARVIS_REQUIRE_CONFIRMATION_FOR_SEND=true
+JARVIS_OPENCLAW_AUTOPILOT_ENABLED=true
 ```
 
 Puedes crear una API key desde Google AI Studio:
@@ -152,6 +161,22 @@ Puedes crear una API key desde Google AI Studio:
 https://aistudio.google.com/app/apikey
 
 No subas `.env` al repositorio.
+
+---
+
+## Automatizacion externa
+
+J.A.R.V.I.S puede delegar acciones externas en una capa interna de automatizacion. Jarvis sigue siendo siempre quien interpreta, redacta y responde al usuario; la capa externa solo ejecuta acciones tecnicas cuando esta configurada.
+
+Capacidades previstas:
+
+- Mensajeria: preparar, enviar y responder mensajes si el canal esta configurado.
+- Correo: buscar, resumir, crear borradores y enviar con confirmacion.
+- Calendario: consultar agenda y crear, modificar o cancelar eventos con confirmacion cuando proceda.
+- Redes sociales: preparar, adaptar, programar y publicar contenido con confirmacion.
+- Workflows personales y reglas de respuesta automatica autorizadas.
+
+Las acciones sensibles se guardan como pendientes y requieren confirmacion, salvo reglas automaticas limitadas que hayan sido autorizadas previamente.
 
 ---
 
