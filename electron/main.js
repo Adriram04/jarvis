@@ -11,6 +11,17 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 let mainWindow;
 let pythonProcess;
+let openclawProcess;
+let openclawStartedByJarvis = false;
+let childCleanupStarted = false;
+
+const OPENCLAW_GATEWAY_PORT = Number(process.env.JARVIS_OPENCLAW_GATEWAY_PORT || process.env.OPENCLAW_GATEWAY_PORT || 18789);
+
+function envFlag(name, defaultValue) {
+    const raw = process.env[name];
+    if (raw === undefined || raw === null || raw === '') return defaultValue;
+    return !['0', 'false', 'no', 'off'].includes(String(raw).trim().toLowerCase());
+}
 
 function resolvePythonExecutable() {
     if (process.env.JARVIS_PYTHON) {
@@ -27,6 +38,177 @@ function resolvePythonExecutable() {
     }
 
     return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+function resolveOpenClawExecutable() {
+    if (process.env.JARVIS_OPENCLAW_EXECUTABLE) {
+        return process.env.JARVIS_OPENCLAW_EXECUTABLE;
+    }
+    return 'openclaw';
+}
+
+function killProcessTree(childProcess, label) {
+    if (!childProcess || !childProcess.pid) return;
+
+    if (process.platform === 'win32') {
+        try {
+            const { execSync } = require('child_process');
+            execSync(`taskkill /pid ${childProcess.pid} /f /t`, { stdio: 'ignore' });
+        } catch (e) {
+            console.error(`Failed to kill ${label} process:`, e.message);
+        }
+    } else {
+        try {
+            childProcess.kill('SIGKILL');
+        } catch (e) {
+            console.error(`Failed to kill ${label} process:`, e.message);
+        }
+    }
+}
+
+function cleanupChildProcesses() {
+    if (childCleanupStarted) return;
+    childCleanupStarted = true;
+
+    console.log('App closing... Killing Python backend and OpenClaw gateway.');
+    if (pythonProcess) {
+        killProcessTree(pythonProcess, 'python');
+        pythonProcess = null;
+    }
+    if (openclawProcess) {
+        openclawStartedByJarvis = false;
+        killProcessTree(openclawProcess, 'OpenClaw');
+        openclawProcess = null;
+    }
+}
+
+function runOpenClawCli(args, timeoutMs = 15000) {
+    return new Promise((resolve) => {
+        const executable = resolveOpenClawExecutable();
+        const child = spawn(executable, args, {
+            shell: process.platform === 'win32',
+            windowsHide: true,
+            env: {
+                ...process.env,
+                OPENCLAW_GATEWAY_PORT: String(OPENCLAW_GATEWAY_PORT),
+            },
+        });
+
+        let stdout = '';
+        let stderr = '';
+        const timeout = setTimeout(() => {
+            killProcessTree(child, 'OpenClaw CLI');
+            resolve({ code: -1, stdout, stderr: `${stderr}\nTimed out.`.trim() });
+        }, timeoutMs);
+
+        child.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+        child.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+        child.on('error', (err) => {
+            clearTimeout(timeout);
+            resolve({ code: -1, stdout, stderr: err.message });
+        });
+        child.on('close', (code) => {
+            clearTimeout(timeout);
+            resolve({ code, stdout, stderr });
+        });
+    });
+}
+
+function waitForPortState(port, shouldBeTaken, timeoutMs = 10000) {
+    const startedAt = Date.now();
+    return new Promise((resolve) => {
+        const check = async () => {
+            const isTaken = await checkPortTaken(port);
+            if (isTaken === shouldBeTaken) {
+                resolve(true);
+                return;
+            }
+            if (Date.now() - startedAt >= timeoutMs) {
+                resolve(false);
+                return;
+            }
+            setTimeout(check, 500);
+        };
+        check();
+    });
+}
+
+async function stopExistingOpenClawGateway() {
+    console.log(`OpenClaw port ${OPENCLAW_GATEWAY_PORT} is already in use. Stopping existing gateway before starting Jarvis-managed OpenClaw...`);
+    const result = await runOpenClawCli(['gateway', 'stop'], 15000);
+    if (result.code !== 0) {
+        console.warn(`OpenClaw gateway stop returned ${result.code}: ${(result.stderr || result.stdout || '').trim()}`);
+    }
+    return waitForPortState(OPENCLAW_GATEWAY_PORT, false, 10000);
+}
+
+async function startOpenClawGateway() {
+    if (!envFlag('JARVIS_OPENCLAW_AUTO_START', true)) {
+        console.log('OpenClaw auto-start disabled by JARVIS_OPENCLAW_AUTO_START.');
+        return;
+    }
+
+    const portTaken = await checkPortTaken(OPENCLAW_GATEWAY_PORT);
+    let forceGatewayStart = false;
+    if (portTaken) {
+        const stopped = await stopExistingOpenClawGateway();
+        if (!stopped) {
+            console.warn(`OpenClaw port ${OPENCLAW_GATEWAY_PORT} is still busy. Starting Jarvis-managed OpenClaw with --force.`);
+            forceGatewayStart = true;
+        }
+    }
+
+    const executable = resolveOpenClawExecutable();
+    console.log(`Starting OpenClaw gateway on port ${OPENCLAW_GATEWAY_PORT} using: ${executable}`);
+
+    const gatewayArgs = ['gateway'];
+    if (forceGatewayStart) {
+        gatewayArgs.push('--force');
+    }
+    gatewayArgs.push('run', '--port', String(OPENCLAW_GATEWAY_PORT));
+
+    openclawProcess = spawn(executable, gatewayArgs, {
+        shell: process.platform === 'win32',
+        windowsHide: true,
+        env: {
+            ...process.env,
+            OPENCLAW_GATEWAY_PORT: String(OPENCLAW_GATEWAY_PORT),
+        },
+    });
+    openclawStartedByJarvis = true;
+
+    openclawProcess.stdout.on('data', (data) => {
+        console.log(`[OpenClaw]: ${data}`);
+    });
+
+    openclawProcess.stderr.on('data', (data) => {
+        console.warn(`[OpenClaw]: ${data}`);
+    });
+
+    openclawProcess.on('error', (err) => {
+        console.error('Failed to start OpenClaw gateway:', err.message);
+        openclawProcess = null;
+        openclawStartedByJarvis = false;
+    });
+
+    openclawProcess.on('exit', (code, signal) => {
+        if (openclawStartedByJarvis) {
+            console.log(`OpenClaw gateway exited (code=${code}, signal=${signal}).`);
+        }
+        openclawProcess = null;
+        openclawStartedByJarvis = false;
+    });
+
+    const ready = await waitForPortState(OPENCLAW_GATEWAY_PORT, true, 20000);
+    if (ready) {
+        console.log('OpenClaw gateway is ready!');
+    } else {
+        console.warn(`OpenClaw gateway did not report port ${OPENCLAW_GATEWAY_PORT} as ready before timeout.`);
+    }
 }
 
 function createWindow() {
@@ -100,7 +282,7 @@ function startPythonBackend() {
     });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     ipcMain.on('window-minimize', () => {
         if (mainWindow) mainWindow.minimize();
     });
@@ -118,6 +300,8 @@ app.whenReady().then(() => {
     ipcMain.on('window-close', () => {
         if (mainWindow) mainWindow.close();
     });
+
+    await startOpenClawGateway();
 
     checkBackendPort(8000).then((isTaken) => {
         if (isTaken) {
@@ -138,6 +322,10 @@ app.whenReady().then(() => {
 });
 
 function checkBackendPort(port) {
+    return checkPortTaken(port);
+}
+
+function checkPortTaken(port) {
     return new Promise((resolve) => {
         const net = require('net');
         const server = net.createServer();
@@ -152,7 +340,7 @@ function checkBackendPort(port) {
             server.close();
             resolve(false);
         });
-        server.listen(port);
+        server.listen(port, '127.0.0.1');
     });
 }
 
@@ -190,20 +378,15 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-    console.log('App closing... Killing Python backend.');
-    if (pythonProcess) {
-        if (process.platform === 'win32') {
-            // Windows: Force kill the process tree synchronously
-            try {
-                const { execSync } = require('child_process');
-                execSync(`taskkill /pid ${pythonProcess.pid} /f /t`);
-            } catch (e) {
-                console.error('Failed to kill python process:', e.message);
-            }
-        } else {
-            // Unix: SIGKILL
-            pythonProcess.kill('SIGKILL');
-        }
-        pythonProcess = null;
-    }
+    cleanupChildProcesses();
+});
+
+process.on('SIGINT', () => {
+    cleanupChildProcesses();
+    app.quit();
+});
+
+process.on('SIGTERM', () => {
+    cleanupChildProcesses();
+    app.quit();
 });

@@ -4,7 +4,7 @@
   "description": "J.A.R.V.I.S - AI Assistant",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && npx electron .\"",
+    "dev": "node scripts/dev_with_openclaw.js",
     "build": "vite build",
     "start": "npx electron .",
     "wake-listener": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\start_wake_listener.ps1 -Mode dev",
