@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Mic, MicOff, Settings, Power, Video, VideoOff, Hand, Lightbulb, Printer, Globe, Box } from 'lucide-react';
+import { Activity, Mic, MicOff, Settings, Power, Video, VideoOff, Hand, Lightbulb, Printer, Globe, Box, ShieldCheck } from 'lucide-react';
 
 const ToolsModule = ({
     isConnected,
@@ -19,6 +19,8 @@ const ToolsModule = ({
     showPrinterWindow,
     onToggleSimulation,
     showSimulationDashboard,
+    onToggleOpenClaw,
+    showOpenClawDashboard,
     onToggleCad,
     showCadWindow,
     onToggleBrowser,
@@ -131,6 +133,17 @@ const ToolsModule = ({
                     title="Simulation Dashboard"
                 >
                     <Activity size={24} />
+                </button>
+
+                <button
+                    onClick={onToggleOpenClaw}
+                    className={`p-3 rounded-full border-2 transition-all duration-300 ${showOpenClawDashboard
+                        ? 'border-teal-300 bg-teal-300/10 text-teal-300 hover:bg-teal-300/20'
+                        : 'border-cyan-900 text-cyan-700 hover:border-teal-400 hover:text-teal-400'
+                        } `}
+                    title="OpenClaw Dashboard"
+                >
+                    <ShieldCheck size={24} />
                 </button>
 
                 {/* CAD Agent Toggle */}

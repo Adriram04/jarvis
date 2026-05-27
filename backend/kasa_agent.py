@@ -1,4 +1,15 @@
 import asyncio
+import platform
+import sys
+
+if sys.platform == "win32" and hasattr(platform, "_wmi_query"):
+    # aiohttp imports platform.system() during python-kasa import. On some
+    # Windows setups WMI can hang indefinitely, which blocks the backend import.
+    def _jarvis_skip_wmi_query(*args, **kwargs):
+        raise OSError("WMI query skipped by Jarvis to avoid Windows import hang.")
+
+    platform._wmi_query = _jarvis_skip_wmi_query
+
 from kasa import Discover, SmartDevice, SmartBulb, SmartPlug
 from simulation_manager import simulation_manager
 from simulators.kasa_simulator import kasa_simulator

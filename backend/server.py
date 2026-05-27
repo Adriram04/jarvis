@@ -1,15 +1,22 @@
 import sys
 import asyncio
+import platform
 
 # Fix for asyncio subprocess support on Windows
 # MUST BE SET BEFORE OTHER IMPORTS
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    if hasattr(platform, "_wmi_query"):
+        def _jarvis_skip_wmi_query(*args, **kwargs):
+            raise OSError("WMI query skipped by Jarvis to avoid Windows import hang.")
+
+        platform._wmi_query = _jarvis_skip_wmi_query
 
 import socketio
 import uvicorn
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import asyncio
 import threading
 import sys
@@ -35,7 +42,14 @@ import backend.jarvis as jarvis
 from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
 from integrations.openclaw_bridge import OpenClawBridge
+from openclaw_allowlist_sync import sync_openclaw_whatsapp_allowlist
 from openclaw_autopilot_manager import OpenClawAutopilotManager
+from openclaw_contacts_importer import import_contacts_csv, import_contacts_vcf
+from openclaw_event_normalizer import normalize_openclaw_inbound
+from openclaw_events_manager import OpenClawEventsManager
+from openclaw_messages_manager import OpenClawMessagesManager
+from openclaw_targets_manager import OpenClawTargetsManager
+from openclaw_voice_intent_router import route_openclaw_voice_intent
 from pending_actions_manager import PendingActionsManager
 from permissions_manager import PermissionsManager
 from simulation_manager import simulation_manager
@@ -89,10 +103,46 @@ CAPABILITY_QUERY_PHRASES = [
     "tus funcionalidades",
 ]
 
+TEXT_CONFIRMATION_PHRASES = {
+    "si",
+    "sí",
+    "ok",
+    "vale",
+    "dale",
+    "adelante",
+    "confirmo",
+    "lo confirmo",
+    "confirmalo",
+    "confírmalo",
+    "envialo",
+    "envíalo",
+    "mandalo",
+    "mándalo",
+}
+
+TEXT_CANCELLATION_PHRASES = {
+    "no",
+    "cancela",
+    "cancelalo",
+    "cancélalo",
+    "cancelar",
+    "no lo envies",
+    "no lo envíes",
+    "no lo mandes",
+    "olvidalo",
+    "olvídalo",
+}
+
 def _normalize_text_for_match(text):
     normalized = unicodedata.normalize("NFKD", text or "")
     without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    return without_accents.lower().strip()
+    return without_accents.lower().strip(" .!?¡¿")
+
+def _is_text_confirmation(text):
+    return _normalize_text_for_match(text) in {_normalize_text_for_match(item) for item in TEXT_CONFIRMATION_PHRASES}
+
+def _is_text_cancellation(text):
+    return _normalize_text_for_match(text) in {_normalize_text_for_match(item) for item in TEXT_CANCELLATION_PHRASES}
 
 def _is_camera_question(text, loop=None):
     normalized = _normalize_text_for_match(text)
@@ -205,14 +255,25 @@ openclaw_bridge = OpenClawBridge()
 openclaw_permissions = PermissionsManager()
 pending_actions_manager = PendingActionsManager()
 openclaw_autopilot_manager = OpenClawAutopilotManager()
+openclaw_targets_manager = OpenClawTargetsManager()
+openclaw_events_manager = OpenClawEventsManager()
+openclaw_messages_manager = OpenClawMessagesManager()
 SETTINGS_FILE = BACKEND_DIR / "settings.json"
 REFERENCE_IMAGE_FILE = BACKEND_DIR / "reference.jpg"
 
 OPENCLAW_TOOL_PERMISSION_DEFAULTS = {
     "openclaw_check_status": False,
+    "openclaw_directory_self": False,
+    "openclaw_directory_peers": False,
+    "openclaw_directory_groups": False,
+    "openclaw_list_targets": False,
+    "openclaw_resolve_target": False,
     "openclaw_execute_action": False,
     "openclaw_send_message": False,
+    "openclaw_send_dry_run": False,
     "openclaw_read_conversation": False,
+    "openclaw_list_events": False,
+    "openclaw_mark_target_allowed": False,
     "openclaw_search_email": False,
     "openclaw_draft_email": False,
     "openclaw_send_email": False,
@@ -485,16 +546,131 @@ def _openclaw_local_result(action_type, summary, success=True, raw=None, warning
         "warnings": warnings or [],
     }
 
+def _api_success(data=None, **extra):
+    response = {"success": True, "data": data, "error": None}
+    response.update(extra)
+    return response
+
+def _api_error(error, data=None, status_code=None, **extra):
+    response = {"success": False, "data": data, "error": str(error or "Error desconocido.")}
+    response.update(extra)
+    if status_code:
+        return JSONResponse(status_code=status_code, content=response)
+    return response
+
+def _api_from_openclaw_result(result, **extra):
+    result = result or {}
+    success = bool(result.get("success"))
+    error = None if success else (result.get("error") or result.get("summary") or "OpenClaw no pudo completar la accion.")
+    response = {"success": success, "data": result, "error": error}
+    response.update(extra)
+    return response
+
+def _extract_openclaw_json(result):
+    raw = (result or {}).get("raw") or {}
+    if isinstance(raw, dict) and isinstance(raw.get("json"), dict):
+        return raw.get("json")
+    if isinstance(raw, dict) and isinstance(raw.get("json"), list):
+        return {"items": raw.get("json")}
+    return {}
+
+def _extract_resolved_target(result, fallback=None):
+    data = _extract_openclaw_json(result)
+    for key in ("canonical_target", "canonicalTarget", "target", "id", "jid", "value", "address"):
+        value = data.get(key)
+        if value:
+            return str(value)
+    target = data.get("target") if isinstance(data.get("target"), dict) else {}
+    for key in ("canonical", "id", "jid", "value"):
+        value = target.get(key)
+        if value:
+            return str(value)
+    return str(fallback or "")
+
+def _target_payload_for_openclaw(payload):
+    payload = dict(payload or {})
+    target_id = payload.get("target_id")
+    if target_id:
+        stored = openclaw_targets_manager.get_target(target_id)
+        if stored:
+            payload.setdefault("channel", stored.get("channel"))
+            payload.setdefault("kind", stored.get("kind"))
+            payload.setdefault("display_target", stored.get("display_name"))
+            payload.setdefault("target", stored.get("raw_target") or stored.get("display_name"))
+            if stored.get("canonical_target"):
+                payload.setdefault("canonical_target", stored.get("canonical_target"))
+    return payload
+
+def _save_inbound_message(incoming_message, raw_payload):
+    incoming_message = incoming_message or {}
+    canonical_target = incoming_message.get("target") or incoming_message.get("sender")
+    return openclaw_messages_manager.add_message(
+        channel=incoming_message.get("channel", "whatsapp"),
+        kind=incoming_message.get("kind", "auto"),
+        target=canonical_target,
+        display_target=incoming_message.get("display_target"),
+        sender=incoming_message.get("sender"),
+        sender_name=incoming_message.get("sender_name"),
+        message=incoming_message.get("message"),
+        message_id=incoming_message.get("message_id"),
+        conversation_id=incoming_message.get("conversation_id"),
+        timestamp=incoming_message.get("timestamp"),
+        read=False,
+        raw=raw_payload,
+    )
+
+def _build_send_payload_from_request(data):
+    payload = _target_payload_for_openclaw(data)
+    target = payload.get("canonical_target") or payload.get("target")
+    if not target:
+        return None
+    return {
+        "channel": payload.get("channel", "whatsapp"),
+        "kind": payload.get("kind", "user"),
+        "target": target,
+        "canonical_target": target,
+        "display_target": payload.get("display_target") or payload.get("target") or target,
+        "target_id": payload.get("target_id"),
+        "message": payload.get("message") or payload.get("text"),
+    }
+
+def _allowed_whatsapp_target_for_payload(payload):
+    payload = payload or {}
+    if str(payload.get("channel", "whatsapp")).strip().lower() != "whatsapp":
+        return True, None
+
+    target = None
+    if payload.get("target_id"):
+        target = openclaw_targets_manager.get_target(payload.get("target_id"))
+    canonical_target = payload.get("canonical_target") or payload.get("target")
+    if not target and canonical_target:
+        target = openclaw_targets_manager.find_by_canonical_target("whatsapp", canonical_target)
+    if not target and payload.get("display_target"):
+        target = openclaw_targets_manager.find_best_match("whatsapp", payload.get("display_target"))
+
+    return bool(target and target.get("allowed")), target
+
 def _env_bool(name, default=False):
     raw = os.getenv(name)
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
+def _sync_openclaw_whatsapp_allowlist_best_effort(force=False):
+    if os.getenv("PYTEST_CURRENT_TEST") and not force:
+        return {"success": True, "skipped": True, "reason": "pytest"}
+    if not force and not _env_bool("JARVIS_OPENCLAW_AUTO_SYNC_ALLOWLIST", True):
+        return {"success": True, "skipped": True, "reason": "disabled"}
+    try:
+        return sync_openclaw_whatsapp_allowlist(openclaw_targets_manager)
+    except Exception as exc:
+        print(f"[OPENCLAW] WhatsApp allowlist sync failed: {exc}")
+        return {"success": False, "error": str(exc)}
+
 def _openclaw_human_summary(action_type, payload):
     payload = payload or {}
     if action_type in {"send_message", "send_whatsapp_message", "send_channel_message"}:
-        return f"Enviar mensaje a {payload.get('target')} por {payload.get('channel')}: {payload.get('message')}"
+        return f"Enviar mensaje a {payload.get('display_target') or payload.get('target')} por {payload.get('channel')}: {payload.get('message')}"
     if action_type in {"send_email", "reply_email"}:
         return f"Enviar correo: {payload.get('subject') or payload.get('to') or 'sin asunto'}"
     if str(action_type).endswith("_calendar_event"):
@@ -504,7 +680,9 @@ def _openclaw_human_summary(action_type, payload):
     if action_type == "run_workflow":
         return f"Ejecutar workflow: {payload.get('workflow_name')}"
     if action_type == "create_autopilot_rule":
-        return f"Crear regla automatica para {payload.get('channel')} -> {payload.get('target')} en modo {payload.get('mode')}"
+        return f"Crear regla automatica para {payload.get('channel')} -> {payload.get('display_target') or payload.get('target')} en modo {payload.get('mode')}"
+    if action_type == "openclaw_mark_target_allowed":
+        return f"Marcar target OpenClaw como permitido: {payload.get('target_id')}"
     if str(action_type).endswith("_autopilot_rule"):
         return f"Modificar regla automatica: {action_type}"
     return f"Ejecutar accion externa: {action_type}"
@@ -516,11 +694,50 @@ async def _execute_openclaw_action(action_type, payload):
     payload = dict(payload or {})
     payload.setdefault("confirmed", True)
     if action_type == "check_status":
-        return await openclaw_bridge.check_status()
+        result = await openclaw_bridge.check_status()
+        openclaw_events_manager.add_event(
+            "status",
+            channel=payload.get("channel", "whatsapp"),
+            message=result.get("summary"),
+            success=result.get("success"),
+            error=result.get("error") or (None if result.get("success") else result.get("summary")),
+            raw=result,
+        )
+        return result
+    if action_type in {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply"}:
+        allowed, target_record = _allowed_whatsapp_target_for_payload(payload)
+        if not allowed:
+            display = (
+                (target_record or {}).get("display_name")
+                or payload.get("display_target")
+                or payload.get("target")
+                or "ese destino"
+            )
+            return _openclaw_local_result(
+                action_type,
+                f"{display} no esta en la allowlist de WhatsApp de Jarvis.",
+                success=False,
+                warnings=["not_allowed"],
+                raw={"target": target_record, "payload": _public_openclaw_payload(payload)},
+            )
+        _sync_openclaw_whatsapp_allowlist_best_effort()
     result = await openclaw_bridge.execute_action(action_type, _public_openclaw_payload(payload))
     rule_id = payload.get("_autopilot_rule_id")
     if rule_id and result.get("success"):
         openclaw_autopilot_manager.register_reply(rule_id)
+    if action_type in {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply"}:
+        real_target = payload.get("canonical_target") or payload.get("target")
+        openclaw_events_manager.add_event(
+            "outbound" if result.get("success") else "error",
+            channel=payload.get("channel", "whatsapp"),
+            kind=payload.get("kind", "auto"),
+            target=real_target,
+            display_target=payload.get("display_target") or payload.get("target"),
+            message=payload.get("message") or payload.get("text"),
+            success=result.get("success"),
+            error=result.get("error") or (None if result.get("success") else result.get("summary")),
+            raw=result,
+        )
     return result
 
 async def _execute_or_queue_openclaw_action(action_type, payload, human_summary=None):
@@ -577,8 +794,17 @@ async def _execute_confirmed_pending_action(action):
             payload.get("mode"),
             payload.get("trigger"),
             payload.get("behavior"),
+            kind=payload.get("kind", "auto"),
+            display_target=payload.get("display_target"),
+            target_id=payload.get("target_id"),
         )
         return _openclaw_local_result(action_type, "Regla de respuesta automatica creada.", raw=rule)
+
+    if action_type == "openclaw_mark_target_allowed":
+        target = openclaw_targets_manager.mark_allowed(payload.get("target_id"), payload.get("allowed", True))
+        if not target:
+            return _openclaw_local_result(action_type, "No encuentro ese target.", success=False, warnings=["not_found"])
+        return _openclaw_local_result(action_type, "Target marcado como permitido manualmente.", raw=target)
 
     if action_type == "enable_autopilot_rule":
         rule = openclaw_autopilot_manager.enable_rule(payload.get("rule_id"))
@@ -611,7 +837,10 @@ def _create_openclaw_autopilot_rule_from_payload(data):
     mode = data.get("mode", "ask_before_send")
     payload = {
         "channel": data.get("channel"),
+        "kind": data.get("kind", "auto"),
         "target": data.get("target"),
+        "display_target": data.get("display_target"),
+        "target_id": data.get("target_id"),
         "mode": mode,
         "trigger": data.get("trigger") or {},
         "behavior": data.get("behavior") or {},
@@ -637,6 +866,9 @@ def _create_openclaw_autopilot_rule_from_payload(data):
         payload["mode"],
         payload["trigger"],
         payload["behavior"],
+        kind=payload.get("kind", "auto"),
+        display_target=payload.get("display_target"),
+        target_id=payload.get("target_id"),
     )
     return _openclaw_local_result("create_autopilot_rule", "Regla de respuesta automatica creada.", raw=rule)
 
@@ -657,7 +889,11 @@ def _create_pending_autopilot_reply(rule, incoming_message, reply_text, draft_on
     action_type = "draft_content" if draft_only else "send_message"
     payload = {
         "channel": incoming_message.get("channel"),
+        "kind": incoming_message.get("kind") or rule.get("kind", "auto"),
         "target": incoming_message.get("target"),
+        "canonical_target": incoming_message.get("target"),
+        "display_target": incoming_message.get("display_target") or rule.get("display_target") or incoming_message.get("target"),
+        "target_id": rule.get("target_id"),
         "message": reply_text,
         "conversation_id": incoming_message.get("conversation_id"),
         "_autopilot_rule_id": rule.get("id"),
@@ -665,41 +901,367 @@ def _create_pending_autopilot_reply(rule, incoming_message, reply_text, draft_on
     pending = pending_actions_manager.create_pending_action(
         action_type,
         payload,
-        f"Respuesta propuesta para {incoming_message.get('target')}: {reply_text}",
+        f"Respuesta propuesta para {payload.get('display_target')}: {reply_text}",
     )
     return pending
 
 @app.get("/api/openclaw/status")
 async def api_openclaw_status():
-    return await openclaw_bridge.check_status()
+    return _api_from_openclaw_result(await openclaw_bridge.check_status())
+
+@app.get("/api/openclaw/directory/self")
+async def api_openclaw_directory_self(channel: str = "whatsapp", account: str = None):
+    result = await openclaw_bridge.directory_self(channel=channel, account=account)
+    return _api_from_openclaw_result(result)
+
+@app.get("/api/openclaw/directory/peers")
+async def api_openclaw_directory_peers(channel: str = "whatsapp", query: str = None, limit: int = 50, account: str = None):
+    result = await openclaw_bridge.directory_peers(channel=channel, query=query, limit=limit, account=account)
+    return _api_from_openclaw_result(result)
+
+@app.get("/api/openclaw/directory/groups")
+async def api_openclaw_directory_groups(channel: str = "whatsapp", query: str = None, limit: int = 50, account: str = None):
+    result = await openclaw_bridge.directory_groups(channel=channel, query=query, limit=limit, account=account)
+    return _api_from_openclaw_result(result)
+
+@app.get("/api/openclaw/targets")
+async def api_openclaw_targets():
+    return _api_success(openclaw_targets_manager.list_targets())
+
+@app.get("/api/openclaw/targets/allowed")
+async def api_openclaw_targets_allowed(channel: str = "whatsapp", kind: str = None):
+    return _api_success(openclaw_targets_manager.list_allowed_targets(channel=channel, kind=kind))
+
+@app.post("/api/openclaw/whatsapp/sync-allowlist")
+async def api_openclaw_whatsapp_sync_allowlist(data: dict = Body(default={})):
+    result = sync_openclaw_whatsapp_allowlist(
+        openclaw_targets_manager,
+        dry_run=bool(data.get("dry_run", False)),
+    )
+    if not result.get("success"):
+        return _api_error(
+            result.get("error") or result.get("reason") or "No se pudo sincronizar la allowlist de WhatsApp con OpenClaw.",
+            warnings=[result.get("reason") or "sync_failed"],
+            data=result,
+        )
+    return _api_success(result)
+
+@app.post("/api/openclaw/targets")
+async def api_openclaw_targets_create(data: dict = Body(default={})):
+    target = openclaw_targets_manager.add_target(
+        data.get("channel", "whatsapp"),
+        data.get("kind", "auto"),
+        data.get("display_name") or data.get("display_target") or data.get("raw_target") or data.get("canonical_target"),
+        data.get("raw_target") or data.get("target") or data.get("phone") or data.get("canonical_target"),
+        canonical_target=data.get("canonical_target") or data.get("phone"),
+        resolved=bool(data.get("resolved", False)),
+        allowed=bool(data.get("allowed", False)),
+        raw_openclaw=data.get("raw_openclaw"),
+        aliases=data.get("aliases") or [],
+        favorite=bool(data.get("favorite", False)),
+        relationship=data.get("relationship", ""),
+        source=data.get("source", "dashboard"),
+    )
+    sync_result = _sync_openclaw_whatsapp_allowlist_best_effort()
+    return _api_success({"target": target, "sync": sync_result})
+
+@app.get("/api/openclaw/targets/resolve-alias")
+async def api_openclaw_target_resolve_alias(alias: str, channel: str = "whatsapp", kind: str = None):
+    target = openclaw_targets_manager.find_best_match(channel, alias, kind=kind)
+    if not target:
+        return _api_error("No encuentro ese alias en la agenda local.", warnings=["not_found"])
+    return _api_success(target)
+
+@app.get("/api/openclaw/targets/{target_id}")
+async def api_openclaw_target_get(target_id: str):
+    target = openclaw_targets_manager.get_target(target_id)
+    if not target:
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+    return _api_success(target)
+
+@app.post("/api/openclaw/targets/{target_id}/resolve")
+async def api_openclaw_target_resolve(target_id: str, data: dict = Body(default={})):
+    target = openclaw_targets_manager.get_target(target_id)
+    if not target:
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+
+    channel = data.get("channel") or target.get("channel") or "whatsapp"
+    kind = data.get("kind") or target.get("kind") or "auto"
+    raw_target = data.get("target") or target.get("raw_target") or target.get("display_name") or target.get("canonical_target")
+    result = await openclaw_bridge.resolve_target(channel, raw_target, kind=kind, account=data.get("account"))
+    if not result.get("success"):
+        openclaw_events_manager.add_event(
+            "error",
+            channel=channel,
+            kind=kind,
+            target=target.get("canonical_target") or raw_target,
+            display_target=target.get("display_name"),
+            message="resolve_target",
+            success=False,
+            error=result.get("error") or result.get("summary"),
+            raw=result,
+        )
+        return _api_from_openclaw_result(result)
+
+    canonical_target = _extract_resolved_target(result, fallback=raw_target)
+    updated = openclaw_targets_manager.update_target(
+        target_id,
+        canonical_target=canonical_target,
+        resolved=True,
+        raw_openclaw=_extract_openclaw_json(result) or result,
+    )
+    return _api_success({"target": updated, "openclaw": result})
+
+@app.post("/api/openclaw/targets/{target_id}/mark-allowed")
+async def api_openclaw_target_mark_allowed(target_id: str, data: dict = Body(default={})):
+    if not openclaw_targets_manager.get_target(target_id):
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+    allowed = data.get("allowed", True)
+    target = openclaw_targets_manager.mark_allowed(target_id, bool(allowed))
+    sync_result = _sync_openclaw_whatsapp_allowlist_best_effort()
+    return _api_success({"target": target, "sync": sync_result})
+
+@app.post("/api/openclaw/targets/{target_id}/aliases")
+async def api_openclaw_target_add_alias(target_id: str, data: dict = Body(default={})):
+    target = openclaw_targets_manager.add_alias(target_id, data.get("alias"))
+    if not target:
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+    return _api_success(target)
+
+@app.delete("/api/openclaw/targets/{target_id}/aliases")
+async def api_openclaw_target_remove_alias(target_id: str, data: dict = Body(default={})):
+    target = openclaw_targets_manager.remove_alias(target_id, data.get("alias"))
+    if not target:
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+    return _api_success(target)
+
+@app.delete("/api/openclaw/targets/{target_id}")
+async def api_openclaw_target_delete(target_id: str):
+    removed = openclaw_targets_manager.delete_target(target_id)
+    if not removed:
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+    sync_result = _sync_openclaw_whatsapp_allowlist_best_effort()
+    return _api_success({"target": removed, "sync": sync_result})
+
+@app.post("/api/openclaw/contacts/import-csv")
+async def api_openclaw_contacts_import_csv(file: UploadFile = File(...)):
+    content = await file.read()
+    summary = import_contacts_csv(content, openclaw_targets_manager)
+    sync_result = _sync_openclaw_whatsapp_allowlist_best_effort()
+    return _api_success({**summary, "sync": sync_result})
+
+@app.post("/api/openclaw/contacts/import-vcf")
+async def api_openclaw_contacts_import_vcf(file: UploadFile = File(...)):
+    content = await file.read()
+    summary = import_contacts_vcf(content, openclaw_targets_manager)
+    sync_result = _sync_openclaw_whatsapp_allowlist_best_effort()
+    return _api_success({**summary, "sync": sync_result})
+
+@app.post("/api/openclaw/read")
+async def api_openclaw_read(data: dict = Body(default={})):
+    payload = _target_payload_for_openclaw(data)
+    target = payload.get("canonical_target") or payload.get("target")
+    if not target:
+        return _api_error("Falta target para leer la conversacion.", warnings=["missing_target"])
+    if str(payload.get("channel", "whatsapp")).lower() == "whatsapp":
+        messages = openclaw_messages_manager.list_messages(
+            channel="whatsapp",
+            target=target,
+            limit=int(payload.get("limit", 10) or 10),
+        )
+        return _api_success(
+            messages,
+            warning="WhatsApp no soporta lectura de historial mediante OpenClaw. Mostrando mensajes inbound guardados localmente.",
+        )
+    result = await openclaw_bridge.read_conversation(
+        payload.get("channel", "whatsapp"),
+        target,
+        limit=int(payload.get("limit", 10) or 10),
+        before=payload.get("before"),
+        after=payload.get("after"),
+        around=payload.get("around"),
+        message_id=payload.get("message_id"),
+        thread_id=payload.get("thread_id"),
+    )
+    return _api_from_openclaw_result(result)
+
+@app.get("/api/openclaw/messages/new")
+async def api_openclaw_messages_new_get(channel: str = "whatsapp", target: str = None, limit: int = 50, mark_read: bool = False):
+    messages = openclaw_messages_manager.list_new_messages(channel=channel, target=target, limit=limit, mark_read=mark_read)
+    return _api_success(messages)
+
+@app.get("/api/openclaw/messages")
+async def api_openclaw_messages(channel: str = None, target: str = None, unread_only: bool = False, limit: int = 50):
+    messages = openclaw_messages_manager.list_messages(channel=channel, target=target, unread_only=unread_only, limit=limit)
+    unread_count = openclaw_messages_manager.get_unread_count(channel=channel, target=target)
+    return _api_success({"messages": messages, "unread_count": unread_count})
+
+@app.get("/api/openclaw/messages/recent")
+async def api_openclaw_messages_recent(channel: str = "whatsapp", target: str = None, minutes: int = 5, limit: int = 50, mark_read: bool = False):
+    messages = openclaw_messages_manager.list_recent_messages(
+        channel=channel,
+        target=target,
+        minutes=minutes,
+        limit=limit,
+        mark_read=mark_read,
+    )
+    return _api_success(messages)
+
+@app.post("/api/openclaw/messages/new")
+async def api_openclaw_messages_new_post(data: dict = Body(default={})):
+    payload = _target_payload_for_openclaw(data)
+    target = payload.get("canonical_target") or payload.get("target")
+    messages = openclaw_messages_manager.list_new_messages(
+        channel=payload.get("channel", "whatsapp"),
+        target=target,
+        limit=int(payload.get("limit", 50) or 50),
+        mark_read=bool(payload.get("mark_read", False)),
+    )
+    return _api_success(messages)
+
+@app.post("/api/openclaw/messages/mark-read")
+async def api_openclaw_messages_mark_read(data: dict = Body(default={})):
+    changed = openclaw_messages_manager.mark_read(
+        message_ids=data.get("message_ids"),
+        channel=data.get("channel"),
+        target=data.get("target"),
+    )
+    return _api_success({"marked_read": len(changed), "messages": changed})
+
+@app.post("/api/openclaw/targets/{target_id}/messages/new")
+async def api_openclaw_target_messages_new(target_id: str, data: dict = Body(default={})):
+    target = openclaw_targets_manager.get_target(target_id)
+    if not target:
+        return _api_error("No encuentro ese target.", warnings=["not_found"])
+    messages = openclaw_messages_manager.list_new_messages(
+        channel=target.get("channel", "whatsapp"),
+        target=target.get("canonical_target") or target.get("raw_target"),
+        limit=int(data.get("limit", 50) or 50),
+        mark_read=bool(data.get("mark_read", True)),
+    )
+    return _api_success(messages)
+
+@app.post("/api/openclaw/send-dry-run")
+async def api_openclaw_send_dry_run(data: dict = Body(default={})):
+    payload = _target_payload_for_openclaw(data)
+    payload["dry_run"] = True
+    allowed, target_record = _allowed_whatsapp_target_for_payload(payload)
+    if not allowed:
+        return _api_error(
+            f"{(target_record or {}).get('display_name') or payload.get('display_target') or payload.get('target') or 'Ese destino'} no esta en la allowlist de WhatsApp de Jarvis.",
+            warnings=["not_allowed"],
+        )
+    result = await openclaw_bridge.execute_action("send_message", payload)
+    openclaw_events_manager.add_event(
+        "dry_run",
+        channel=payload.get("channel", "whatsapp"),
+        kind=payload.get("kind", "auto"),
+        target=payload.get("canonical_target") or payload.get("target"),
+        display_target=payload.get("display_target") or payload.get("target"),
+        message=payload.get("message") or payload.get("text"),
+        success=result.get("success"),
+        error=result.get("error") or (None if result.get("success") else result.get("summary")),
+        raw=result,
+    )
+    return _api_from_openclaw_result(result)
+
+@app.post("/api/openclaw/send-pending")
+async def api_openclaw_send_pending(data: dict = Body(default={})):
+    payload = _build_send_payload_from_request(data)
+    if not payload or not payload.get("message"):
+        return _api_error("Falta target o mensaje para crear el envio pendiente.", warnings=["invalid_request"])
+    allowed, target_record = _allowed_whatsapp_target_for_payload(payload)
+    if not allowed:
+        return _api_error(
+            f"{(target_record or {}).get('display_name') or payload.get('display_target') or payload.get('target') or 'Ese destino'} no esta en la allowlist de WhatsApp de Jarvis.",
+            warnings=["not_allowed"],
+        )
+    pending = pending_actions_manager.create_pending_action(
+        "send_message",
+        payload,
+        _openclaw_human_summary("send_message", payload),
+    )
+    return _api_success({"pending_action_id": pending["id"], "pending_action": pending})
+
+@app.get("/api/openclaw/events")
+async def api_openclaw_events(limit: int = 100, type: str = None, channel: str = None):
+    return _api_success(openclaw_events_manager.list_events(limit=limit, type=type, channel=channel))
 
 @app.post("/api/openclaw/action")
 async def api_openclaw_action(data: dict = Body(default={})):
     action_type = data.get("action_type") or data.get("type")
     payload = data.get("payload") or {}
-    return await _execute_or_queue_openclaw_action(action_type, payload)
+    return _api_from_openclaw_result(await _execute_or_queue_openclaw_action(action_type, payload))
 
 @app.post("/api/openclaw/inbound")
-async def api_openclaw_inbound(data: dict = Body(default={})):
-    if not _env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
-        return {"matched": False, "message": "Las respuestas automaticas externas no estan habilitadas.", "results": []}
+async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
+    inbound_secret = os.getenv("JARVIS_OPENCLAW_INBOUND_SECRET", "").strip()
+    if inbound_secret and request.headers.get("X-Jarvis-OpenClaw-Secret") != inbound_secret:
+        return _api_error("Invalid OpenClaw inbound secret.", status_code=401)
 
-    incoming_message = {
-        "channel": data.get("channel"),
-        "target": data.get("target"),
-        "sender": data.get("sender"),
-        "message": data.get("message"),
-        "conversation_id": data.get("conversation_id"),
-        "timestamp": data.get("timestamp") or datetime.now().isoformat(timespec="seconds"),
-    }
+    incoming_message = normalize_openclaw_inbound(data)
+    target_record = openclaw_targets_manager.upsert_from_inbound(incoming_message)
+    stored_message = _save_inbound_message(incoming_message, data)
+    inbound_event = openclaw_events_manager.add_event(
+        "inbound",
+        channel=incoming_message.get("channel"),
+        kind=incoming_message.get("kind"),
+        target=incoming_message.get("target"),
+        display_target=incoming_message.get("display_target"),
+        message=incoming_message.get("message"),
+        success=True,
+        raw=data,
+    )
+
+    if not _env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
+        return _api_success(
+            {
+                "incoming": incoming_message,
+                "message": stored_message,
+                "stored_message": stored_message,
+                "target": target_record,
+                "event": inbound_event,
+                "matched": False,
+                "results": [],
+            },
+            matched=False,
+            message="Las respuestas automaticas externas no estan habilitadas.",
+        )
+
     matches = openclaw_autopilot_manager.find_matching_rules(incoming_message)
     if not matches:
-        return {"matched": False, "message": "No hay reglas activas para este evento.", "results": []}
+        return _api_success(
+            {
+                "incoming": incoming_message,
+                "message": stored_message,
+                "stored_message": stored_message,
+                "target": target_record,
+                "event": inbound_event,
+                "matched": False,
+                "results": [],
+            },
+            matched=False,
+            message="No hay reglas activas para este evento.",
+        )
 
     results = []
     for rule in matches:
         reply_text = _build_autopilot_reply(rule, incoming_message)
         mode = rule.get("mode")
+        openclaw_events_manager.add_event(
+            "rule_match",
+            channel=incoming_message.get("channel"),
+            kind=incoming_message.get("kind"),
+            target=incoming_message.get("target"),
+            display_target=incoming_message.get("display_target"),
+            message=incoming_message.get("message"),
+            success=True,
+            raw={"rule_id": rule.get("id"), "mode": mode},
+        )
+
+        if openclaw_autopilot_manager.is_message_blocked(rule, incoming_message):
+            results.append({"rule_id": rule.get("id"), "mode": mode, "status": "blocked_by_behavior"})
+            continue
 
         if mode == "draft_only":
             pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text, draft_only=True)
@@ -733,7 +1295,25 @@ async def api_openclaw_inbound(data: dict = Body(default={})):
                 openclaw_autopilot_manager.register_reply(rule.get("id"))
             results.append({"rule_id": rule.get("id"), "mode": mode, "status": "executed", "result": result})
 
-    return {"matched": True, "rules": matches, "results": results}
+    first_pending = next((item.get("pending_action") for item in results if item.get("pending_action")), None)
+    first_result = results[0] if results else {}
+    return _api_success(
+        {
+            "incoming": incoming_message,
+            "message": stored_message,
+            "stored_message": stored_message,
+            "target": target_record,
+            "event": inbound_event,
+            "rules": matches,
+            "matched": True,
+            "pending_action_id": first_pending.get("id") if first_pending else None,
+            "results": results,
+        },
+        matched=True,
+        rule_id=first_result.get("rule_id"),
+        pending_action_id=first_pending.get("id") if first_pending else None,
+        mode=first_result.get("mode"),
+    )
 
 @app.get("/api/pending-actions")
 async def api_pending_actions():
@@ -949,6 +1529,17 @@ async def start_audio(sid, data=None):
         )
         print("AudioLoop initialized successfully.")
 
+        # Share the same OpenClaw state managers with the HTTP/dashboard layer.
+        # Voice runs inside AudioLoop, but contacts can be imported from the
+        # dashboard after startup; using the same objects keeps aliases,
+        # pending actions and inbound messages coherent everywhere.
+        audio_loop.openclaw_bridge = openclaw_bridge
+        audio_loop.openclaw_permissions = openclaw_permissions
+        audio_loop.pending_actions_manager = pending_actions_manager
+        audio_loop.openclaw_autopilot_manager = openclaw_autopilot_manager
+        audio_loop.openclaw_targets_manager = openclaw_targets_manager
+        audio_loop.openclaw_messages_manager = openclaw_messages_manager
+
         # Apply current permissions
         audio_loop.update_permissions(SETTINGS["tool_permissions"])
         
@@ -1097,11 +1688,73 @@ async def confirm_tool(sid, data):
     confirmed = data.get('confirmed', False)
     
     print(f"[SERVER DEBUG] Received confirmation response for {request_id}: {confirmed}")
+
+    pending = pending_actions_manager.get_action(request_id)
+    if pending:
+        if not confirmed:
+            pending_actions_manager.cancel_action(request_id)
+            await sio.emit('transcription', {'sender': 'JARVIS', 'text': 'Accion cancelada.', 'append': False}, room=sid)
+            await sio.emit('openclaw_pending_action', None)
+            return
+
+        action = pending_actions_manager.confirm_action(request_id)
+        result = await _execute_confirmed_pending_action(action)
+        pending_actions_manager.mark_executed(request_id, result)
+        if result.get("success"):
+            message = result.get("summary") or "Accion ejecutada correctamente."
+        else:
+            message = result.get("error") or result.get("summary") or "No he podido ejecutar la accion."
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
+        await sio.emit('openclaw_pending_action', None)
+        return
     
     if audio_loop:
         audio_loop.resolve_tool_confirmation(request_id, confirmed)
     else:
         print("Audio loop not active, cannot resolve confirmation.")
+
+async def _handle_text_pending_confirmation(sid, text):
+    wants_confirm = _is_text_confirmation(text)
+    wants_cancel = _is_text_cancellation(text)
+    if not wants_confirm and not wants_cancel:
+        return False
+
+    pending_actions = pending_actions_manager.get_pending_actions()
+    if not pending_actions:
+        return False
+
+    if len(pending_actions) > 1:
+        message = "Tienes varias acciones pendientes. Confirma desde el panel para evitar enviar la equivocada."
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
+        if audio_loop and audio_loop.project_manager:
+            audio_loop.project_manager.log_chat("User", text)
+            audio_loop.project_manager.log_chat("JARVIS", message)
+        return True
+
+    pending = pending_actions[0]
+    if wants_cancel:
+        pending_actions_manager.cancel_action(pending["id"])
+        message = "Accion cancelada."
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
+        await sio.emit('openclaw_pending_action', None)
+        if audio_loop and audio_loop.project_manager:
+            audio_loop.project_manager.log_chat("User", text)
+            audio_loop.project_manager.log_chat("JARVIS", message)
+        return True
+
+    action = pending_actions_manager.confirm_action(pending["id"])
+    result = await _execute_confirmed_pending_action(action)
+    pending_actions_manager.mark_executed(pending["id"], result)
+    if result.get("success"):
+        message = result.get("summary") or "Accion ejecutada correctamente."
+    else:
+        message = result.get("error") or result.get("summary") or "No he podido ejecutar la accion."
+    await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
+    await sio.emit('openclaw_pending_action', None)
+    if audio_loop and audio_loop.project_manager:
+        audio_loop.project_manager.log_chat("User", text)
+        audio_loop.project_manager.log_chat("JARVIS", message)
+    return True
 
 @sio.event
 async def shutdown(sid, data=None):
@@ -1142,14 +1795,14 @@ async def user_input(sid, data):
     intent = _simulation_command_intent(text)
     if intent:
         message = await set_simulation_mode(intent == "activate")
-        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message})
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False})
         if audio_loop and audio_loop.project_manager:
             audio_loop.project_manager.log_chat("JARVIS", message)
         return
 
     if _is_capability_question(text):
         message = _jarvis_capability_response()
-        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message})
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False})
         if audio_loop and audio_loop.project_manager:
             audio_loop.project_manager.log_chat("JARVIS", message)
         if audio_loop and audio_loop.session:
@@ -1163,6 +1816,44 @@ async def user_input(sid, data):
                 )
             except Exception as e:
                 print(f"[SERVER DEBUG] Failed to sync capability answer to live session: {e}")
+        return
+
+    if await _handle_text_pending_confirmation(sid, text):
+        return
+
+    local_openclaw_intent = route_openclaw_voice_intent(
+        text,
+        openclaw_targets_manager,
+        openclaw_messages_manager,
+        pending_actions_manager,
+        session_id=sid,
+    )
+    if local_openclaw_intent.get("handled"):
+        message = local_openclaw_intent.get("response") or local_openclaw_intent.get("message") or "He gestionado la accion de WhatsApp."
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False})
+        pending_action = (local_openclaw_intent.get("data") or {}).get("pending_action") or local_openclaw_intent.get("pending_action")
+        if pending_action:
+            await sio.emit('openclaw_pending_action', pending_action)
+            await sio.emit('tool_confirmation_request', {
+                "id": pending_action.get("id"),
+                "tool": pending_action.get("action_type"),
+                "args": pending_action.get("payload"),
+            })
+        if audio_loop and audio_loop.project_manager:
+            audio_loop.project_manager.log_chat("User", text)
+            audio_loop.project_manager.log_chat("JARVIS", message)
+        if _env_bool("JARVIS_SYNC_LOCAL_WHATSAPP_TO_MODEL", False) and audio_loop and audio_loop.session:
+            try:
+                await audio_loop.session.send(
+                    input=(
+                        "System Notification: The app handled this WhatsApp alias/local-message intent directly. "
+                        "Do not call OpenClaw for resolve/read and do not answer it again. "
+                        f"User text: {text}\nResult: {message}"
+                    ),
+                    end_of_turn=False,
+                )
+            except Exception as e:
+                print(f"[SERVER DEBUG] Failed to sync local OpenClaw intent: {e}")
         return
 
     if not audio_loop:
@@ -1188,7 +1879,7 @@ async def user_input(sid, data):
         if _is_camera_question(text, audio_loop):
             print("[SERVER DEBUG] Handling typed camera question with direct vision inspection.")
             camera_result = await audio_loop.inspect_camera_view(text)
-            await sio.emit('transcription', {'sender': 'JARVIS', 'text': camera_result})
+            await sio.emit('transcription', {'sender': 'JARVIS', 'text': camera_result, 'append': False})
             if audio_loop.project_manager:
                 audio_loop.project_manager.log_chat("JARVIS", camera_result)
             try:

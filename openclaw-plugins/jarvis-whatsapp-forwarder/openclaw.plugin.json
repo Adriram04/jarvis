@@ -1,0 +1,37 @@
+{
+  "id": "jarvis-whatsapp-forwarder",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Jarvis WhatsApp Forwarder",
+  "description": "Forwards WhatsApp inbound events to Jarvis and silences OpenClaw auto replies for WhatsApp.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 250
+      },
+      "blockOpenClawReplies": {
+        "type": "boolean"
+      },
+      "includeRaw": {
+        "type": "boolean"
+      }
+    }
+  },
+  "uiHints": {
+    "endpoint": {
+      "label": "Jarvis inbound endpoint",
+      "help": "Local Jarvis endpoint that receives normalized WhatsApp inbound events."
+    },
+    "blockOpenClawReplies": {
+      "label": "Silence OpenClaw WhatsApp replies",
+      "help": "When enabled, Jarvis receives inbound WhatsApp events but OpenClaw does not answer them directly."
+    }
+  }
+}

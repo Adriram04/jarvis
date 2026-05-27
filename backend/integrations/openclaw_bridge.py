@@ -117,24 +117,115 @@ class OpenClawBridge:
         payload = {
             "channel": incoming_message.get("channel") or (rule or {}).get("channel") or "whatsapp",
             "target": incoming_message.get("target") or (rule or {}).get("target"),
+            "canonical_target": incoming_message.get("canonical_target") or incoming_message.get("target") or (rule or {}).get("target"),
+            "display_target": incoming_message.get("display_target") or (rule or {}).get("display_target"),
+            "kind": incoming_message.get("kind") or (rule or {}).get("kind", "auto"),
             "message": incoming_message.get("outgoing_message") or incoming_message.get("reply") or incoming_message.get("message"),
             "confirmed_by_active_rule": True,
         }
         return await self._send_message_action("autopilot_reply", payload)
 
-    async def send_message(self, channel, target, message):
+    async def send_message(
+        self,
+        channel="whatsapp",
+        target=None,
+        message=None,
+        canonical_target=None,
+        display_target=None,
+        kind="auto",
+        dry_run=False,
+    ):
         return await self.execute_action("send_message", {
             "channel": channel,
             "target": target,
             "message": message,
+            "canonical_target": canonical_target,
+            "display_target": display_target,
+            "kind": kind,
+            "dry_run": dry_run,
         })
 
-    async def read_conversation(self, channel, target, limit=10):
+    async def send_channel_message(self, channel="whatsapp", target=None, message=None, **kwargs):
+        return await self.execute_action("send_channel_message", {
+            "channel": channel,
+            "target": target,
+            "message": message,
+            **(kwargs or {}),
+        })
+
+    async def directory_self(self, channel="whatsapp", account=None):
+        if not self.is_enabled():
+            return self._disabled_result("directory_self")
+
+        args = ["directory", "self", "--channel", str(channel or "whatsapp")]
+        if account:
+            args.extend(["--account", str(account)])
+        args.append("--json")
+        raw = await self._run_cli(args, self.timeout_seconds)
+        return self._normalize_result(raw, "directory_self")
+
+    async def directory_peers(self, channel="whatsapp", query=None, limit=50, account=None):
+        if not self.is_enabled():
+            return self._disabled_result("directory_peers")
+
+        args = ["directory", "peers", "list", "--channel", str(channel or "whatsapp"), "--limit", str(int(limit or 50))]
+        if query:
+            args.extend(["--query", str(query)])
+        if account:
+            args.extend(["--account", str(account)])
+        args.append("--json")
+        raw = await self._run_cli(args, self.timeout_seconds)
+        return self._normalize_result(raw, "directory_peers")
+
+    async def directory_groups(self, channel="whatsapp", query=None, limit=50, account=None):
+        if not self.is_enabled():
+            return self._disabled_result("directory_groups")
+
+        args = ["directory", "groups", "list", "--channel", str(channel or "whatsapp"), "--limit", str(int(limit or 50))]
+        if query:
+            args.extend(["--query", str(query)])
+        if account:
+            args.extend(["--account", str(account)])
+        args.append("--json")
+        raw = await self._run_cli(args, self.timeout_seconds)
+        return self._normalize_result(raw, "directory_groups")
+
+    async def read_conversation(
+        self,
+        channel,
+        target,
+        limit=10,
+        before=None,
+        after=None,
+        around=None,
+        message_id=None,
+        thread_id=None,
+    ):
         return await self.execute_action("read_conversation", {
             "channel": channel,
             "target": target,
             "limit": int(limit),
+            "before": before,
+            "after": after,
+            "around": around,
+            "message_id": message_id,
+            "thread_id": thread_id,
         })
+
+    async def list_messages(self, channel, target, limit=10, **kwargs):
+        if self._is_whatsapp_channel(channel):
+            return {
+                "success": False,
+                "service": "openclaw",
+                "action_type": "list_messages",
+                "summary": "WhatsApp no soporta lectura de historial mediante OpenClaw. Usa mensajes inbound guardados en Jarvis.",
+                "error": "WhatsApp no soporta lectura de historial mediante OpenClaw. Usa mensajes inbound guardados en Jarvis.",
+                "code": "OPENCLAW_WHATSAPP_READ_UNSUPPORTED",
+                "raw": None,
+                "external_id": None,
+                "warnings": ["read_unsupported"],
+            }
+        return await self.read_conversation(channel, target, limit=limit, **(kwargs or {}))
 
     async def search_items(self, service, query, max_results=10):
         return await self.execute_action("search_items", {
@@ -170,16 +261,20 @@ class OpenClawBridge:
             "payload": payload or {},
         })
 
-    async def resolve_target(self, channel, target, kind="auto"):
+    async def resolve_target(self, channel, target, kind="auto", account=None):
+        if not self.is_enabled():
+            return self._disabled_result("resolve_target")
+
         args = [
             *self.resolve_command,
             "--channel",
             str(channel or "whatsapp"),
             "--kind",
             str(kind or "auto"),
-            "--json",
-            str(target or ""),
         ]
+        if account:
+            args.extend(["--account", str(account)])
+        args.extend([str(target or ""), "--json"])
         raw = await self._run_cli(args, self.timeout_seconds)
         return self._normalize_result(raw, "resolve_target")
 
@@ -190,15 +285,18 @@ class OpenClawBridge:
             channel = "whatsapp"
         channel = channel or "whatsapp"
         target = payload.get("target") or payload.get("contact")
+        canonical_target = payload.get("canonical_target") or payload.get("canonicalTarget")
+        display_target = payload.get("display_target") or payload.get("displayTarget") or target
+        real_target = canonical_target or target
         message = payload.get("message") or payload.get("text")
 
-        if not target:
+        if not real_target:
             return self._validation_result(action_type, "Falta el destinatario del mensaje.", "missing_target")
         if not message:
             return self._validation_result(action_type, "Falta el contenido del mensaje.", "missing_message")
 
-        if self.require_resolve:
-            resolved = await self.resolve_target(channel, target, payload.get("kind", "auto"))
+        if self.require_resolve and not self._is_whatsapp_channel(channel):
+            resolved = await self.resolve_target(channel, real_target, payload.get("kind", "auto"), payload.get("account"))
             if not resolved.get("success"):
                 return resolved
 
@@ -207,15 +305,17 @@ class OpenClawBridge:
             "--channel",
             str(channel),
             "--target",
-            str(target),
+            str(real_target),
             "--message",
             str(message),
             "--json",
         ]
+        if payload.get("dry_run") is True or str(payload.get("dry_run")).strip().lower() in {"1", "true", "yes", "on"}:
+            args.append("--dry-run")
         raw = await self._run_cli(args, self.timeout_seconds)
         result = self._normalize_result(raw, action_type)
         if result.get("success"):
-            result["summary"] = f"Mensaje enviado mediante {channel} a {target}."
+            result["summary"] = f"Mensaje enviado mediante {channel} a {display_target or real_target}."
         return result
 
     async def _read_messages_action(self, action_type, payload):
@@ -224,9 +324,20 @@ class OpenClawBridge:
         target = payload.get("target") or payload.get("contact")
         limit = payload.get("limit", 10)
 
-        args = ["message", "read", "--channel", str(channel), "--json", "--limit", str(limit)]
+        args = ["message", "read", "--channel", str(channel)]
         if target:
             args.extend(["--target", str(target)])
+        args.extend(["--limit", str(int(limit or 10))])
+        for flag, key in (
+            ("--before", "before"),
+            ("--after", "after"),
+            ("--around", "around"),
+            ("--message-id", "message_id"),
+            ("--thread-id", "thread_id"),
+        ):
+            if payload.get(key):
+                args.extend([flag, str(payload.get(key))])
+        args.append("--json")
         raw = await self._run_cli(args, self.timeout_seconds)
         result = self._normalize_result(raw, action_type)
 
@@ -330,6 +441,45 @@ class OpenClawBridge:
             if "timeout" in (raw.get("warnings") or []):
                 summary = "OpenClaw CLI timed out."
             return self._unavailable_result(action_type, summary, raw.get("warnings", []), raw)
+
+        if self._contains_text(raw, "not listed in the configured WhatsApp allowlist"):
+            return {
+                "success": False,
+                "service": "openclaw",
+                "action_type": action_type,
+                "summary": "Target is not allowed by the configured WhatsApp allowlist.",
+                "error": "Target is not allowed by the configured WhatsApp allowlist.",
+                "code": "OPENCLAW_WHATSAPP_ALLOWLIST_BLOCKED",
+                "raw": None,
+                "external_id": None,
+                "warnings": ["allowlist_blocked"],
+            }
+
+        if action_type == "resolve_target" and self._contains_text(raw, "does not support resolve"):
+            return {
+                "success": False,
+                "service": "openclaw",
+                "action_type": action_type,
+                "summary": "WhatsApp no soporta resolución de targets mediante OpenClaw. Usa agenda local de Jarvis.",
+                "error": "WhatsApp no soporta resolución de targets mediante OpenClaw. Usa agenda local de Jarvis.",
+                "code": "OPENCLAW_WHATSAPP_RESOLVE_UNSUPPORTED",
+                "raw": None,
+                "external_id": None,
+                "warnings": ["resolve_unsupported"],
+            }
+
+        if action_type in MESSAGE_READ_ACTIONS and self._contains_text(raw, "Message action read not supported for channel whatsapp"):
+            return {
+                "success": False,
+                "service": "openclaw",
+                "action_type": action_type,
+                "summary": "WhatsApp no soporta lectura de historial mediante OpenClaw. Usa mensajes inbound guardados en Jarvis.",
+                "error": "WhatsApp no soporta lectura de historial mediante OpenClaw. Usa mensajes inbound guardados en Jarvis.",
+                "code": "OPENCLAW_WHATSAPP_READ_UNSUPPORTED",
+                "raw": None,
+                "external_id": None,
+                "warnings": ["read_unsupported"],
+            }
 
         stdout = str(raw.get("stdout", "") if isinstance(raw, dict) else "")
         stderr = str(raw.get("stderr", "") if isinstance(raw, dict) else "")
@@ -442,6 +592,9 @@ class OpenClawBridge:
     def _contains_text(self, raw, text):
         blob = json.dumps(raw, ensure_ascii=False).lower() if isinstance(raw, (dict, list)) else str(raw).lower()
         return str(text).lower() in blob
+
+    def _is_whatsapp_channel(self, channel):
+        return str(channel or "").strip().lower() == "whatsapp"
 
     def _build_internal_instruction(self, action_type, payload):
         return {

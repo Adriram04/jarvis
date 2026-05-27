@@ -16,6 +16,7 @@ import KasaWindow from './components/KasaWindow';
 import PrinterWindow from './components/PrinterWindow';
 import SettingsWindow from './components/SettingsWindow';
 import SimulationDashboard from './components/SimulationDashboard';
+import OpenClawDashboard from './components/OpenClawDashboard';
 
 
 
@@ -62,6 +63,7 @@ function App() {
     const [showCadWindow, setShowCadWindow] = useState(false);
     const [showBrowserWindow, setShowBrowserWindow] = useState(false);
     const [showSimulationDashboard, setShowSimulationDashboard] = useState(false);
+    const [showOpenClawDashboard, setShowOpenClawDashboard] = useState(false);
     const [simulationState, setSimulationState] = useState({ simulation_mode: false, kasa_simulation: false, printer_simulation: false });
 
     // Printing workflow status (for top toolbar display)
@@ -99,6 +101,7 @@ function App() {
         kasa: { x: window.innerWidth / 2 + 350, y: window.innerHeight / 2 - 100 },
         printer: { x: window.innerWidth / 2 - 350, y: window.innerHeight / 2 - 100 },
         simulation: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+        openclaw: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
         tools: { x: window.innerWidth / 2, y: window.innerHeight - 100 } // Fixed bottom OFFSET
     });
 
@@ -111,13 +114,14 @@ function App() {
         video: { w: 320, h: 180 },
         kasa: { w: 300, h: 380 }, // Approx
         printer: { w: 380, h: 380 }, // Approx
-        simulation: { w: 780, h: 620 }
+        simulation: { w: 780, h: 620 },
+        openclaw: { w: 920, h: 700 }
     });
     const [activeDragElement, setActiveDragElement] = useState(null);
 
     // Z-Index Stacking Order (last element = highest z-index)
     const [zIndexOrder, setZIndexOrder] = useState([
-        'visualizer', 'chat', 'tools', 'video', 'cad', 'browser', 'kasa', 'printer', 'simulation'
+        'visualizer', 'chat', 'tools', 'video', 'cad', 'browser', 'kasa', 'printer', 'simulation', 'openclaw'
     ]);
 
     // Hand Control State
@@ -479,9 +483,10 @@ function App() {
         socket.on('transcription', (data) => {
             setMessages(prev => {
                 const lastMsg = prev[prev.length - 1];
+                const shouldAppend = data.append !== false;
 
                 // If the last message is from the same sender, append the chunk
-                if (lastMsg && lastMsg.sender === data.sender) {
+                if (shouldAppend && lastMsg && lastMsg.sender === data.sender) {
                     // Create a NEW object instead of mutating (prevents React StrictMode duplication)
                     return [
                         ...prev.slice(0, -1),
@@ -1466,6 +1471,13 @@ function App() {
         }
     };
 
+    const toggleOpenClawDashboard = () => {
+        setShowOpenClawDashboard(!showOpenClawDashboard);
+        if (!showOpenClawDashboard) {
+            bringToFront('openclaw');
+        }
+    };
+
     const openPrinterWindow = () => {
         setShowPrinterWindow(true);
         const size = elementSizes.printer || { w: 380, h: 380 };
@@ -1792,6 +1804,8 @@ function App() {
                         showPrinterWindow={showPrinterWindow}
                         onToggleSimulation={toggleSimulationDashboard}
                         showSimulationDashboard={showSimulationDashboard}
+                        onToggleOpenClaw={toggleOpenClawDashboard}
+                        showOpenClawDashboard={showOpenClawDashboard}
                         onToggleCad={() => setShowCadWindow(!showCadWindow)}
                         showCadWindow={showCadWindow}
                         onToggleBrowser={() => setShowBrowserWindow(!showBrowserWindow)}
@@ -1836,6 +1850,15 @@ function App() {
                         position={elementPositions.simulation}
                         onMouseDown={(e) => handleMouseDown(e, 'simulation')}
                         zIndex={getZIndex('simulation')}
+                    />
+                )}
+
+                {showOpenClawDashboard && (
+                    <OpenClawDashboard
+                        onClose={() => setShowOpenClawDashboard(false)}
+                        position={elementPositions.openclaw}
+                        onMouseDown={(e) => handleMouseDown(e, 'openclaw')}
+                        zIndex={getZIndex('openclaw')}
                     />
                 )}
 

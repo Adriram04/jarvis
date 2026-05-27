@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-whatsapp-forwarder",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "Forward WhatsApp inbound hooks from OpenClaw to Jarvis.",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

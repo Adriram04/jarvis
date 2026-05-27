@@ -12,6 +12,21 @@ SAFE_ACTIONS = {
     "list_messages",
     "get_autopilot_rules",
     "get_pending_actions",
+    "openclaw_status",
+    "openclaw_directory_self",
+    "openclaw_directory_peers",
+    "openclaw_directory_groups",
+    "openclaw_list_targets",
+    "openclaw_resolve_target",
+    "openclaw_read_conversation",
+    "openclaw_list_events",
+    "openclaw_list_messages",
+    "openclaw_list_new_messages",
+    "openclaw_import_contacts",
+    "openclaw_send_dry_run",
+    "openclaw_resolve_alias",
+    "openclaw_add_target_alias",
+    "openclaw_remove_target_alias",
 }
 
 CONFIRMATION_REQUIRED_ACTIONS = {
@@ -31,6 +46,13 @@ CONFIRMATION_REQUIRED_ACTIONS = {
     "disable_autopilot_rule",
     "update_autopilot_rule",
     "delete_autopilot_rule",
+    "openclaw_send_message",
+    "openclaw_send_pending",
+    "openclaw_mark_target_allowed",
+    "openclaw_create_autopilot_rule",
+    "openclaw_enable_autopilot_rule",
+    "openclaw_delete_autopilot_rule",
+    "openclaw_execute_workflow",
 }
 
 FORBIDDEN_ACTIONS = {
@@ -46,6 +68,13 @@ FORBIDDEN_ACTIONS = {
     "auto_reply_everywhere",
     "impersonate_sensitive_identity",
     "bypass_confirmation",
+    "spam",
+    "bulk_message",
+    "mass_dm",
+    "expose_secret",
+    "delete_all",
+    "publish_without_review",
+    "send_without_confirmation",
 }
 
 
@@ -98,4 +127,3 @@ def is_forbidden(action_type):
 
 def explain(action_type):
     return permissions_manager.explain(action_type)
-

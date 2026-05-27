@@ -139,6 +139,193 @@ def test_execute_action_send_message_builds_message_send(monkeypatch):
     assert result["summary"] == "Mensaje enviado mediante whatsapp a Grupo TFG."
 
 
+def test_directory_self_builds_command(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.directory_self())
+
+    assert seen["args"] == ["directory", "self", "--channel", "whatsapp", "--json"]
+
+
+def test_directory_peers_builds_command(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.directory_peers(query="Adri", limit=25, account="main"))
+
+    assert seen["args"] == [
+        "directory",
+        "peers",
+        "list",
+        "--channel",
+        "whatsapp",
+        "--limit",
+        "25",
+        "--query",
+        "Adri",
+        "--account",
+        "main",
+        "--json",
+    ]
+
+
+def test_directory_groups_builds_command(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.directory_groups(limit=10))
+
+    assert seen["args"] == ["directory", "groups", "list", "--channel", "whatsapp", "--limit", "10", "--json"]
+
+
+def test_resolve_target_uses_kind_group(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.resolve_target("whatsapp", "Grupo TFG", kind="group"))
+
+    assert seen["args"] == ["channels", "resolve", "--channel", "whatsapp", "--kind", "group", "Grupo TFG", "--json"]
+
+
+def test_send_message_uses_canonical_target_when_present(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    result = asyncio.run(bridge.execute_action("send_message", {
+        "channel": "whatsapp",
+        "target": "Grupo TFG",
+        "canonical_target": "120363000000000000@g.us",
+        "display_target": "Grupo TFG",
+        "message": "Hola",
+    }))
+
+    assert seen["args"][seen["args"].index("--target") + 1] == "120363000000000000@g.us"
+    assert result["summary"] == "Mensaje enviado mediante whatsapp a Grupo TFG."
+
+
+def test_whatsapp_send_skips_required_resolve(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    monkeypatch.setenv("JARVIS_OPENCLAW_REQUIRE_RESOLVE", "true")
+    bridge = OpenClawBridge()
+    calls = []
+
+    async def fake_run_cli(args, timeout):
+        calls.append(args)
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.execute_action("send_message", {"channel": "whatsapp", "target": "+34722129717", "message": "Hola"}))
+
+    assert len(calls) == 1
+    assert calls[0][:2] == ["message", "send"]
+    assert ["channels", "resolve"] not in calls
+
+
+def test_send_message_adds_dry_run(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.execute_action("send_message", {"target": "+34625941034", "message": "Hola", "dry_run": True}))
+
+    assert "--dry-run" in seen["args"]
+
+
+def test_read_conversation_uses_message_read(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.read_conversation("whatsapp", "+34625941034", limit=5, message_id="abc"))
+
+    assert seen["args"] == [
+        "message",
+        "read",
+        "--channel",
+        "whatsapp",
+        "--target",
+        "+34625941034",
+        "--limit",
+        "5",
+        "--message-id",
+        "abc",
+        "--json",
+    ]
+
+
+def test_list_messages_calls_message_read_not_message_list(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    calls = []
+
+    async def fake_run_cli(args, timeout):
+        calls.append(args)
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    asyncio.run(bridge.list_messages("telegram", "chat-1"))
+
+    assert calls[0][:2] == ["message", "read"]
+    assert calls[0][:2] != ["message", "list"]
+
+
+def test_whatsapp_list_messages_does_not_call_cli_read(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    calls = []
+
+    async def fake_run_cli(args, timeout):
+        calls.append(args)
+        return {"success": True, "stdout": json.dumps({"success": True}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    result = asyncio.run(bridge.list_messages("whatsapp", "+34722129717"))
+
+    assert calls == []
+    assert result["code"] == "OPENCLAW_WHATSAPP_READ_UNSUPPORTED"
+
+
 def test_execute_action_send_whatsapp_message_uses_whatsapp_default(monkeypatch):
     monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
     bridge = OpenClawBridge()
@@ -251,3 +438,57 @@ def test_specific_error_summaries(monkeypatch):
     assert unknown["summary"] == "Comando OpenClaw no reconocido."
     assert method["summary"] == "Metodo RPC de OpenClaw no encontrado."
     assert scope["summary"] == "OpenClaw respondio, pero faltan permisos para esa operacion."
+
+
+def test_allowlist_error_is_normalized(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+
+    result = bridge._normalize_result(
+        {
+            "success": False,
+            "stderr": "target +34000000000 is not listed in the configured WhatsApp allowlist",
+            "returncode": 1,
+        },
+        "send_message",
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "OPENCLAW_WHATSAPP_ALLOWLIST_BLOCKED"
+    assert result["error"] == "Target is not allowed by the configured WhatsApp allowlist."
+
+
+def test_whatsapp_resolve_unsupported_is_normalized(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+
+    result = bridge._normalize_result(
+        {
+            "success": False,
+            "stderr": 'Error: Channel "whatsapp" does not support resolve.',
+            "returncode": 1,
+        },
+        "resolve_target",
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "OPENCLAW_WHATSAPP_RESOLVE_UNSUPPORTED"
+    assert result["error"] == "WhatsApp no soporta resolución de targets mediante OpenClaw. Usa agenda local de Jarvis."
+
+
+def test_whatsapp_read_unsupported_is_normalized(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+
+    result = bridge._normalize_result(
+        {
+            "success": False,
+            "stderr": "Error: Message action read not supported for channel whatsapp.",
+            "returncode": 1,
+        },
+        "read_conversation",
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "OPENCLAW_WHATSAPP_READ_UNSUPPORTED"
+    assert result["error"] == "WhatsApp no soporta lectura de historial mediante OpenClaw. Usa mensajes inbound guardados en Jarvis."

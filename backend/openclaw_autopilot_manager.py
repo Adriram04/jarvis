@@ -1,4 +1,5 @@
 import json
+import unicodedata
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,8 @@ ALLOWED_MODES = {"draft_only", "ask_before_send", "auto_send_limited"}
 SENSITIVE_TERMS = {
     "contraseña",
     "password",
+    "contraseña",
+    "contraseñas",
     "token",
     "api key",
     "apikey",
@@ -17,6 +20,7 @@ SENSITIVE_TERMS = {
     "credential",
     "secreto",
     "secret",
+    "secretos",
     "dni",
     "tarjeta",
     "bank",
@@ -32,6 +36,12 @@ def _now_iso():
     return _now().isoformat(timespec="seconds")
 
 
+def _normalize_text(text):
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return without_accents.casefold().strip()
+
+
 class OpenClawAutopilotManager:
     """Manages bounded Jarvis autopilot rules delivered through OpenClaw."""
 
@@ -42,13 +52,17 @@ class OpenClawAutopilotManager:
         self._rules = []
         self._load()
 
-    def create_rule(self, channel, target, mode, trigger, behavior):
+    def create_rule(self, channel, target, mode, trigger, behavior, kind="auto", display_target=None, target_id=None):
         mode = mode if mode in ALLOWED_MODES else "ask_before_send"
+        canonical_target = str(target or "").strip()
         rule = {
             "id": str(uuid.uuid4()),
             "enabled": True,
             "channel": str(channel or "").strip().lower(),
-            "target": str(target or "").strip(),
+            "kind": self._normalize_kind(kind),
+            "target": canonical_target,
+            "display_target": str(display_target or target or "").strip(),
+            "target_id": str(target_id or "").strip(),
             "mode": mode,
             "trigger": self._normalize_trigger(trigger),
             "behavior": self._normalize_behavior(behavior),
@@ -106,6 +120,12 @@ class OpenClawAutopilotManager:
             return False
         return not self._is_rate_limited(stored_rule)
 
+    def is_message_blocked(self, rule, incoming_message):
+        stored_rule = self._coerce_rule(rule)
+        if not stored_rule:
+            return True
+        return self._contains_sensitive_topic(stored_rule, incoming_message or {})
+
     def register_reply(self, rule_id):
         with self._lock:
             rule = self._find_rule(rule_id)
@@ -134,36 +154,40 @@ class OpenClawAutopilotManager:
 
     def _matches_rule(self, rule, incoming_message):
         channel = str(incoming_message.get("channel", "")).lower()
-        target = str(incoming_message.get("target", ""))
+        target = str(incoming_message.get("canonical_target") or incoming_message.get("target") or "")
+        incoming_kind = self._normalize_kind(incoming_message.get("kind"))
+        rule_kind = self._normalize_kind(rule.get("kind"))
         if rule.get("channel") and rule.get("channel") != channel:
             return False
-        if rule.get("target") and rule.get("target").lower() != target.lower():
+        if rule_kind != "auto" and incoming_kind != "auto" and rule_kind != incoming_kind:
+            return False
+        if rule.get("target") and _normalize_text(rule.get("target")) != _normalize_text(target):
             return False
 
         trigger = rule.get("trigger", {})
         trigger_type = trigger.get("type", "manual")
-        message_text = str(incoming_message.get("message", "")).lower()
-        sender = str(incoming_message.get("sender", "")).lower()
+        message_text = _normalize_text(incoming_message.get("message", ""))
+        sender = _normalize_text(incoming_message.get("sender", ""))
 
         if trigger_type == "all_messages":
             return True
         if trigger_type == "keywords":
-            return any(str(keyword).lower() in message_text for keyword in trigger.get("keywords", []))
+            return any(_normalize_text(keyword) in message_text for keyword in trigger.get("keywords", []) if str(keyword).strip())
         if trigger_type == "sender":
-            return bool(trigger.get("sender")) and str(trigger.get("sender")).lower() == sender
+            return bool(trigger.get("sender")) and _normalize_text(trigger.get("sender")) == sender
         return False
 
     def _contains_sensitive_topic(self, rule, incoming_message):
-        message_text = str(incoming_message.get("message", "")).lower()
+        message_text = _normalize_text(incoming_message.get("message", ""))
         behavior = rule.get("behavior", {})
 
-        forbidden_topics = {str(topic).lower() for topic in behavior.get("forbidden_topics", [])}
+        forbidden_topics = {_normalize_text(topic) for topic in behavior.get("forbidden_topics", [])}
         if any(topic and topic in message_text for topic in forbidden_topics):
             return True
-        if any(term in message_text for term in SENSITIVE_TERMS):
+        if any(_normalize_text(term) in message_text for term in SENSITIVE_TERMS):
             return True
 
-        allowed_topics = [str(topic).lower() for topic in behavior.get("allowed_topics", []) if topic]
+        allowed_topics = [_normalize_text(topic) for topic in behavior.get("allowed_topics", []) if topic]
         if allowed_topics and not any(topic in message_text for topic in allowed_topics):
             return True
         return False
@@ -188,6 +212,10 @@ class OpenClawAutopilotManager:
             "keywords": list(trigger.get("keywords") or []),
             "sender": trigger.get("sender"),
         }
+
+    def _normalize_kind(self, kind):
+        normalized = str(kind or "auto").strip().lower()
+        return normalized if normalized in {"user", "group", "auto"} else "auto"
 
     def _normalize_behavior(self, behavior):
         behavior = deepcopy(behavior or {})

@@ -2,9 +2,19 @@ import asyncio
 import base64
 import io
 import os
+import re
 import sys
+import platform
 import traceback
+import unicodedata
 from dotenv import load_dotenv
+
+if sys.platform == "win32" and hasattr(platform, "_wmi_query"):
+    def _jarvis_skip_wmi_query(*args, **kwargs):
+        raise OSError("WMI query skipped by Jarvis to avoid Windows import hang.")
+
+    platform._wmi_query = _jarvis_skip_wmi_query
+
 import cv2
 import pyaudio
 import PIL.Image
@@ -317,7 +327,7 @@ openclaw_tools = [
     ),
     _openclaw_tool(
         "openclaw_read_conversation",
-        "Reads recent messages from a configured conversation if available.",
+        "Reads recent messages from a configured conversation if available. Do not use for WhatsApp; WhatsApp inbound messages are read from Jarvis' local inbound store.",
         {
             "channel": {"type": "STRING"},
             "target": {"type": "STRING"},
@@ -377,6 +387,7 @@ config = types.LiveConnectConfig(
         "For 'desactiva el modo simulacion', 'desactivar simulacion', or 'desactiva modo demo', call deactivate_simulation_mode. "
         "For print control requests such as 'pausa la impresion', 'reanuda la impresion', or 'cancela la impresion', call pause_print, resume_print, or cancel_print. "
         "You can use OpenClaw only as an internal automation and external connectivity layer. OpenClaw never answers the user. You remain Jarvis: interpret intent, decide the action, draft content, apply permissions, ask for confirmation, and answer the user. "
+        "For WhatsApp, use local saved contacts/aliases and direct canonical phone targets when available. Do not use OpenClaw target resolution or message history reading for WhatsApp; WhatsApp messages can only be sent directly and new messages are available only from inbound events saved locally. "
         "Do not implement or use direct integrations for Gmail, Calendar, WhatsApp Web, Instagram, LinkedIn, X/Twitter, Telegram, Slack, Discord, Notion, or GitHub; all external messaging, email, calendar, social, workflow, and skill actions must go through OpenClawBridge. "
         "Never send messages, emails, posts, invitations, cancellations, or automatic replies without explicit user confirmation, unless there is a previously authorized limited autopilot rule. "
         "Before sensitive actions, show the service or channel, recipient/group/platform, content, date/time if relevant, and exact action. After execution, answer in first person as Jarvis. Do not say that OpenClaw is speaking or quote OpenClaw as the final responder. "
@@ -404,6 +415,9 @@ from integrations.openclaw_bridge import OpenClawBridge
 from permissions_manager import PermissionsManager
 from pending_actions_manager import PendingActionsManager
 from openclaw_autopilot_manager import OpenClawAutopilotManager
+from openclaw_messages_manager import OpenClawMessagesManager
+from openclaw_targets_manager import OpenClawTargetsManager
+from openclaw_voice_intent_router import route_openclaw_voice_intent
 
 class AudioLoop:
     def __init__(self, video_mode=DEFAULT_MODE, on_audio_data=None, on_video_frame=None, on_cad_data=None, on_web_data=None, on_transcription=None, on_tool_confirmation=None, on_cad_status=None, on_cad_thought=None, on_project_update=None, on_device_update=None, on_simulation_update=None, on_error=None, input_device_index=None, input_device_name=None, output_device_index=None, kasa_agent=None):
@@ -457,6 +471,17 @@ class AudioLoop:
         self.openclaw_permissions = PermissionsManager()
         self.pending_actions_manager = PendingActionsManager()
         self.openclaw_autopilot_manager = OpenClawAutopilotManager()
+        self.openclaw_targets_manager = OpenClawTargetsManager()
+        self.openclaw_messages_manager = OpenClawMessagesManager()
+        self._last_local_openclaw_intent_text = ""
+        self._local_openclaw_intent_task = None
+        self._local_openclaw_intent_debounce_seconds = self._float_env("JARVIS_WHATSAPP_VOICE_INTENT_DEBOUNCE_SECONDS", 1.0)
+        self._suppress_model_output_until = 0.0
+        self._input_echo_guard_enabled = self._env_bool("JARVIS_INPUT_ECHO_GUARD_ENABLED", True)
+        self._echo_audio_cooldown_seconds = self._float_env("JARVIS_INPUT_ECHO_AUDIO_COOLDOWN_SECONDS", 1.2)
+        self._model_audio_active_until = 0.0
+        self._recent_model_output_text = ""
+        self._recent_model_output_until = 0.0
 
         self.send_text_task = None
         self.stop_event = asyncio.Event()
@@ -520,6 +545,10 @@ class AudioLoop:
             if not future.done():
                 future.set_result(False)
 
+        task = getattr(self, "_local_openclaw_intent_task", None)
+        if task and not task.done():
+            task.cancel()
+
         self._put_stop_sentinel(self.out_queue)
         self._put_stop_sentinel(self.audio_in_queue)
         self._close_stream("audio_stream")
@@ -574,6 +603,53 @@ class AudioLoop:
                 print(f"[JARVIS DEBUG] [AUDIO] Cleared {count} chunks from playback queue due to interruption.")
         except Exception as e:
             print(f"[JARVIS DEBUG] [ERR] Failed to clear audio queue: {e}")
+
+    def _mark_model_audio_active(self):
+        self._model_audio_active_until = max(
+            getattr(self, "_model_audio_active_until", 0.0),
+            time.time() + getattr(self, "_echo_audio_cooldown_seconds", 1.2),
+        )
+
+    def _normalize_echo_text(self, value):
+        text = unicodedata.normalize("NFKD", str(value or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.casefold()
+        text = re.sub(r"[^a-z0-9+]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _remember_model_output_text(self, text):
+        normalized = self._normalize_echo_text(text)
+        if not normalized:
+            return
+        recent = f"{getattr(self, '_recent_model_output_text', '')} {normalized}".strip()
+        self._recent_model_output_text = recent[-2000:]
+        self._recent_model_output_until = time.time() + 20
+
+    def _input_looks_like_recent_model_output(self, transcript):
+        normalized = self._normalize_echo_text(transcript)
+        if not normalized:
+            return False
+
+        recent = getattr(self, "_recent_model_output_text", "")
+        if not recent or time.time() > getattr(self, "_recent_model_output_until", 0.0):
+            return False
+
+        if len(normalized) >= 4 and (normalized in recent or recent.endswith(normalized)):
+            return True
+
+        words = [word for word in normalized.split() if len(word) > 2]
+        if len(words) < 2:
+            return False
+        recent_words = set(recent.split())
+        overlap = sum(1 for word in words if word in recent_words)
+        return overlap / max(1, len(words)) >= 0.67
+
+    def _should_ignore_input_transcript(self, transcript):
+        if not getattr(self, "_input_echo_guard_enabled", True):
+            return False
+        if time.time() < getattr(self, "_model_audio_active_until", 0.0):
+            return True
+        return self._input_looks_like_recent_model_output(transcript)
 
     async def send_frame(self, frame_data):
         # Update the latest frame payload received from the frontend webcam.
@@ -1131,39 +1207,49 @@ class AudioLoop:
         print(f"[JARVIS DEBUG] [OPENCLAW] Tool Call: {name} Args={args}")
 
         try:
-            if name == "openclaw_check_status":
-                result = await self.openclaw_bridge.check_status()
-            elif name == "get_pending_actions":
-                actions = self.pending_actions_manager.get_pending_actions()
+            if self._should_suppress_model_output() and self._is_whatsapp_openclaw_tool_call(name, args):
                 result = self._openclaw_local_result(
-                    "get_pending_actions",
-                    f"{len(actions)} accion(es) pendiente(s).",
-                    raw=actions,
+                    name,
+                    "La solicitud de WhatsApp ya fue gestionada localmente por Jarvis.",
+                    warnings=["whatsapp_already_handled_locally"],
                 )
-            elif name == "confirm_pending_action":
-                result = await self._confirm_pending_openclaw_action(args.get("action_id"))
-            elif name == "cancel_pending_action":
-                result = self._cancel_pending_openclaw_action(args.get("action_id"))
-            elif name == "create_openclaw_autopilot_rule":
-                result = self._create_openclaw_autopilot_rule(args)
-            elif name == "list_openclaw_autopilot_rules":
-                rules = self.openclaw_autopilot_manager.list_rules()
-                result = self._openclaw_local_result(
-                    "get_autopilot_rules",
-                    f"{len(rules)} regla(s) de respuesta automatica configurada(s).",
-                    raw=rules,
-                )
-            elif name in {"enable_openclaw_autopilot_rule", "disable_openclaw_autopilot_rule", "delete_openclaw_autopilot_rule"}:
-                action_type = {
-                    "enable_openclaw_autopilot_rule": "enable_autopilot_rule",
-                    "disable_openclaw_autopilot_rule": "disable_autopilot_rule",
-                    "delete_openclaw_autopilot_rule": "delete_autopilot_rule",
-                }[name]
-                payload = {"rule_id": args.get("rule_id")}
-                result = self._queue_or_block_openclaw_action(action_type, payload, self._human_summary(action_type, payload))
             else:
-                action_type, payload = self._openclaw_action_from_tool(name, args)
-                result = await self._execute_or_queue_openclaw_action(action_type, payload)
+                blocked_whatsapp = self._blocked_whatsapp_openclaw_tool_result(name, args)
+                if blocked_whatsapp:
+                    result = blocked_whatsapp
+                elif name == "openclaw_check_status":
+                    result = await self.openclaw_bridge.check_status()
+                elif name == "get_pending_actions":
+                    actions = self.pending_actions_manager.get_pending_actions()
+                    result = self._openclaw_local_result(
+                        "get_pending_actions",
+                        f"{len(actions)} accion(es) pendiente(s).",
+                        raw=actions,
+                    )
+                elif name == "confirm_pending_action":
+                    result = await self._confirm_pending_openclaw_action(args.get("action_id"))
+                elif name == "cancel_pending_action":
+                    result = self._cancel_pending_openclaw_action(args.get("action_id"))
+                elif name == "create_openclaw_autopilot_rule":
+                    result = self._create_openclaw_autopilot_rule(args)
+                elif name == "list_openclaw_autopilot_rules":
+                    rules = self.openclaw_autopilot_manager.list_rules()
+                    result = self._openclaw_local_result(
+                        "get_autopilot_rules",
+                        f"{len(rules)} regla(s) de respuesta automatica configurada(s).",
+                        raw=rules,
+                    )
+                elif name in {"enable_openclaw_autopilot_rule", "disable_openclaw_autopilot_rule", "delete_openclaw_autopilot_rule"}:
+                    action_type = {
+                        "enable_openclaw_autopilot_rule": "enable_autopilot_rule",
+                        "disable_openclaw_autopilot_rule": "disable_autopilot_rule",
+                        "delete_openclaw_autopilot_rule": "delete_autopilot_rule",
+                    }[name]
+                    payload = {"rule_id": args.get("rule_id")}
+                    result = self._queue_or_block_openclaw_action(action_type, payload, self._human_summary(action_type, payload))
+                else:
+                    action_type, payload = self._openclaw_action_from_tool(name, args)
+                    result = await self._execute_or_queue_openclaw_action(action_type, payload)
         except Exception as exc:
             result = self._openclaw_local_result(
                 name,
@@ -1173,6 +1259,70 @@ class AudioLoop:
             )
 
         return types.FunctionResponse(id=fc.id, name=fc.name, response={"result": result})
+
+    def _schedule_local_openclaw_voice_intent(self, transcript):
+        if not str(transcript or "").strip():
+            return
+        task = getattr(self, "_local_openclaw_intent_task", None)
+        if task and not task.done():
+            task.cancel()
+        self._local_openclaw_intent_task = asyncio.create_task(
+            self._debounced_local_openclaw_voice_intent(transcript)
+        )
+
+    async def _debounced_local_openclaw_voice_intent(self, transcript):
+        try:
+            await asyncio.sleep(max(0.05, self._local_openclaw_intent_debounce_seconds))
+            if transcript != self._last_input_transcription:
+                return None
+            return await self._handle_local_openclaw_voice_intent(transcript)
+        except asyncio.CancelledError:
+            return None
+
+    async def _handle_local_openclaw_voice_intent(self, transcript):
+        normalized = " ".join(str(transcript or "").lower().split())
+        if not normalized or normalized == self._last_local_openclaw_intent_text:
+            return None
+
+        result = route_openclaw_voice_intent(
+            transcript,
+            self.openclaw_targets_manager,
+            self.openclaw_messages_manager,
+            self.pending_actions_manager,
+            session_id="audio_loop",
+        )
+        if not result.get("handled"):
+            return None
+
+        self._last_local_openclaw_intent_text = normalized
+        self._suppress_model_output_until = max(self._suppress_model_output_until, time.time() + 3.0)
+        self.clear_audio_queue()
+        message = result.get("response") or result.get("message") or "He gestionado la accion local de WhatsApp."
+        self._remember_model_output_text(message)
+        if self.on_transcription:
+            self.on_transcription({"sender": "JARVIS", "text": message, "append": False})
+        pending_action = (result.get("data") or {}).get("pending_action") or result.get("pending_action")
+        if pending_action and self.on_tool_confirmation:
+            self.on_tool_confirmation({
+                "id": pending_action.get("id"),
+                "tool": pending_action.get("action_type"),
+                "args": pending_action.get("payload"),
+            })
+        if self.project_manager:
+            self.project_manager.log_chat("JARVIS", message)
+        if self._env_bool("JARVIS_SYNC_LOCAL_WHATSAPP_TO_MODEL", False):
+            try:
+                await self.session.send(
+                    input=(
+                        "System Notification: Jarvis handled this WhatsApp alias/local-message intent directly. "
+                        "Do not call OpenClaw resolve/read and do not answer it again. "
+                        f"Result: {message}"
+                    ),
+                    end_of_turn=False,
+                )
+            except Exception as exc:
+                print(f"[JARVIS DEBUG] [OPENCLAW] Failed to sync local WhatsApp intent: {exc}")
+        return result
 
     async def _execute_or_queue_openclaw_action(self, action_type, payload, human_summary=None):
         action_type = str(action_type or "").strip()
@@ -1352,6 +1502,167 @@ class AudioLoop:
             return "run_workflow", {"workflow_name": args.get("workflow_name"), "payload": args.get("payload") or {}}
         return name, dict(args or {})
 
+    def _blocked_whatsapp_openclaw_tool_result(self, name, args):
+        args = args or {}
+        action_type = args.get("action_type") if name == "openclaw_execute_action" else None
+        payload = args.get("payload") if name == "openclaw_execute_action" else args
+        payload = payload or {}
+        channel = str(payload.get("channel") or args.get("channel") or "").strip().lower()
+        action_norm = str(action_type or name or "").strip().lower()
+
+        is_whatsapp = channel == "whatsapp" or "whatsapp" in action_norm
+        is_send = action_norm in {"openclaw_send_message", "send_message", "send_whatsapp_message", "send_channel_message"} or "send" in action_norm
+        is_read = action_norm in {"openclaw_read_conversation", "read_conversation", "list_messages"} or "read" in action_norm
+
+        if not is_whatsapp:
+            return None
+
+        if is_read:
+            return self._openclaw_local_result(
+                action_norm,
+                "WhatsApp no soporta lectura de historial en OpenClaw; Jarvis lee mensajes inbound guardados.",
+                success=False,
+                warnings=["whatsapp_read_local_only"],
+            )
+
+        if is_send or name == "openclaw_execute_action":
+            return self._queue_whatsapp_send_from_tool(action_norm, payload)
+
+        return None
+
+    def _looks_like_phone_target(self, value):
+        compact = re.sub(r"[\s().-]+", "", str(value or "").strip())
+        return bool(re.fullmatch(r"\+\d{6,15}", compact) or re.fullmatch(r"\d{6,15}", compact))
+
+    def _normalize_direct_phone_target(self, value):
+        compact = re.sub(r"[\s().-]+", "", str(value or "").strip())
+        if compact.startswith("00"):
+            compact = f"+{compact[2:]}"
+        if compact.startswith("+"):
+            return compact
+        if compact.startswith("34"):
+            return f"+{compact}"
+        if re.fullmatch(r"[679]\d{8}", compact):
+            return f"+34{compact}"
+        return compact
+
+    def _same_whatsapp_pending(self, pending_payload, canonical_target, message):
+        pending_payload = pending_payload or {}
+        if str(pending_payload.get("channel") or "").strip().lower() != "whatsapp":
+            return False
+        pending_target = pending_payload.get("canonical_target") or pending_payload.get("target")
+        return (
+            str(pending_target or "").strip() == str(canonical_target or "").strip()
+            and str(pending_payload.get("message") or "").strip() == str(message or "").strip()
+        )
+
+    def _find_existing_whatsapp_pending(self, canonical_target, message):
+        manager = getattr(self, "pending_actions_manager", None)
+        if not manager:
+            return None
+        for action in manager.get_pending_actions():
+            if action.get("action_type") in {"send_message", "send_whatsapp_message", "send_channel_message"} and self._same_whatsapp_pending(action.get("payload"), canonical_target, message):
+                return action
+        return None
+
+    def _queue_whatsapp_send_from_tool(self, action_norm, payload):
+        payload = dict(payload or {})
+        message = str(payload.get("message") or payload.get("text") or "").strip()
+        target_text = str(
+            payload.get("canonical_target")
+            or payload.get("target")
+            or payload.get("display_target")
+            or ""
+        ).strip()
+
+        if not target_text or not message:
+            return self._openclaw_local_result(
+                action_norm,
+                "Falta contacto o mensaje para preparar el WhatsApp.",
+                success=False,
+                warnings=["invalid_whatsapp_tool_payload"],
+            )
+
+        target = None
+        manager = getattr(self, "openclaw_targets_manager", None)
+        if manager:
+            target = manager.find_best_match("whatsapp", target_text)
+
+        if target:
+            canonical_target = target.get("canonical_target") or target.get("raw_target")
+            display_target = target.get("display_name") or target_text
+            kind = target.get("kind", "user")
+            target_id = target.get("id")
+        elif payload.get("canonical_target") or self._looks_like_phone_target(target_text):
+            canonical_target = payload.get("canonical_target") or self._normalize_direct_phone_target(target_text)
+            display_target = payload.get("display_target") or target_text
+            kind = payload.get("kind", "user")
+            target_id = payload.get("target_id")
+        else:
+            return self._openclaw_local_result(
+                action_norm,
+                f"No tengo guardado el contacto '{target_text}'. Importalo o crealo en la agenda WhatsApp de Jarvis antes de enviar.",
+                success=False,
+                warnings=["whatsapp_target_not_found", "whatsapp_local_flow_required"],
+            )
+
+        if not canonical_target:
+            return self._openclaw_local_result(
+                action_norm,
+                f"El contacto {display_target} no tiene numero o target canonico guardado.",
+                success=False,
+                warnings=["whatsapp_target_missing_canonical"],
+            )
+
+        pending_manager = getattr(self, "pending_actions_manager", None)
+        if not pending_manager:
+            return self._openclaw_local_result(
+                action_norm,
+                "Las acciones de WhatsApp por alias se gestionan localmente por Jarvis mediante agenda y confirmacion.",
+                success=False,
+                warnings=["whatsapp_local_flow_required"],
+            )
+
+        send_payload = {
+            "channel": "whatsapp",
+            "kind": kind,
+            "target": canonical_target,
+            "canonical_target": canonical_target,
+            "display_target": display_target,
+            "target_id": target_id,
+            "message": message,
+        }
+        existing = self._find_existing_whatsapp_pending(canonical_target, message)
+        if existing:
+            pending = existing
+        else:
+            pending = pending_manager.create_pending_action(
+                "send_message",
+                send_payload,
+                f"Enviar WhatsApp a {display_target}: {message}",
+            )
+
+        tool_confirmation_callback = getattr(self, "on_tool_confirmation", None)
+        if tool_confirmation_callback and not existing:
+            tool_confirmation_callback({
+                "id": pending.get("id"),
+                "tool": pending.get("action_type"),
+                "args": pending.get("payload"),
+            })
+
+        summary = f"He preparado el WhatsApp para {display_target}: '{message}'. Confirmalo para enviarlo."
+        self._remember_model_output_text(summary)
+        transcription_callback = getattr(self, "on_transcription", None)
+        if transcription_callback and not existing:
+            transcription_callback({"sender": "JARVIS", "text": summary, "append": False})
+        return self._openclaw_local_result(
+            action_norm,
+            summary,
+            success=False,
+            raw=pending,
+            warnings=["confirmation_required", "whatsapp_local_pending_action"],
+        )
+
     def _autopilot_rule_mutation_result(self, action_type, rule, label):
         if not rule:
             return self._openclaw_local_result(action_type, "No encuentro esa regla.", success=False, warnings=["not_found"])
@@ -1392,10 +1703,32 @@ class AudioLoop:
             return default
         return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
+    def _float_env(self, name, default=0.0):
+        raw = os.getenv(name)
+        if raw is None:
+            return float(default)
+        try:
+            return float(raw)
+        except Exception:
+            return float(default)
+
+    def _should_suppress_model_output(self):
+        return time.time() < getattr(self, "_suppress_model_output_until", 0.0)
+
+    def _is_whatsapp_openclaw_tool_call(self, name, args):
+        args = args or {}
+        action_type = args.get("action_type") if name == "openclaw_execute_action" else None
+        payload = args.get("payload") if name == "openclaw_execute_action" else args
+        payload = payload or {}
+        channel = str(payload.get("channel") or args.get("channel") or "").strip().lower()
+        action_norm = str(action_type or name or "").strip().lower()
+        return channel == "whatsapp" or "whatsapp" in action_norm
+
     async def receive_audio(self):
         "Background task to reads from the websocket and write pcm chunks to the output queue"
         try:
             while not self.stop_event.is_set():
+                turn_input_transcript = ""
                 turn = self.session.receive()
                 async for response in turn:
                     if self.stop_event.is_set():
@@ -1403,7 +1736,8 @@ class AudioLoop:
 
                     # 1. Handle Audio Data
                     if data := response.data:
-                        if self.audio_in_queue:
+                        self._mark_model_audio_active()
+                        if self.audio_in_queue and not self._should_suppress_model_output():
                             self.audio_in_queue.put_nowait(data)
                         # NOTE: 'continue' removed here to allow processing transcription/tools in same packet
 
@@ -1412,6 +1746,12 @@ class AudioLoop:
                         if response.server_content.input_transcription:
                             transcript = response.server_content.input_transcription.text
                             if transcript:
+                                if self._should_ignore_input_transcript(transcript):
+                                    if transcript != self._last_input_transcription:
+                                        self._last_input_transcription = transcript
+                                        print("[JARVIS DEBUG] [ECHO] Ignored input transcription while Jarvis audio/output is active.")
+                                    continue
+
                                 # Skip if this is an exact duplicate event
                                 if transcript != self._last_input_transcription:
                                     # Calculate delta (Gemini may send cumulative or chunk-based text)
@@ -1419,6 +1759,7 @@ class AudioLoop:
                                     if transcript.startswith(self._last_input_transcription):
                                         delta = transcript[len(self._last_input_transcription):]
                                     self._last_input_transcription = transcript
+                                    turn_input_transcript = transcript
                                     
                                     # Only send if there's new text
                                     if delta:
@@ -1439,8 +1780,10 @@ class AudioLoop:
                                         else:
                                             # Append
                                             self.chat_buffer["text"] += delta
+
+                                        self._schedule_local_openclaw_voice_intent(transcript)
                         
-                        if response.server_content.output_transcription:
+                        if response.server_content.output_transcription and not self._should_suppress_model_output():
                             transcript = response.server_content.output_transcription.text
                             if transcript:
                                 # Skip if this is an exact duplicate event
@@ -1453,6 +1796,7 @@ class AudioLoop:
                                     
                                     # Only send if there's new text
                                     if delta:
+                                        self._remember_model_output_text(delta)
                                         # Send to frontend (Streaming)
                                         if self.on_transcription:
                                              self.on_transcription({"sender": "JARVIS", "text": delta})
@@ -1944,10 +2288,12 @@ class AudioLoop:
                             await self.session.send_tool_response(function_responses=function_responses)
                 
                 # Turn/Response Loop Finished
+                task = getattr(self, "_local_openclaw_intent_task", None)
+                if task and not task.done():
+                    task.cancel()
+                if turn_input_transcript:
+                    await self._handle_local_openclaw_voice_intent(turn_input_transcript)
                 self.flush_chat()
-
-                while not self.audio_in_queue.empty():
-                    self.audio_in_queue.get_nowait()
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1972,9 +2318,11 @@ class AudioLoop:
                 bytestream = await self.audio_in_queue.get()
                 if bytestream is None:
                     break
+                self._mark_model_audio_active()
                 if self.on_audio_data:
                     self.on_audio_data(bytestream)
                 await asyncio.to_thread(stream.write, bytestream)
+                self._mark_model_audio_active()
         finally:
             if stream is not None and self.output_audio_stream is stream:
                 self._close_stream("output_audio_stream")
