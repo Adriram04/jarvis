@@ -418,6 +418,7 @@ from openclaw_autopilot_manager import OpenClawAutopilotManager
 from openclaw_messages_manager import OpenClawMessagesManager
 from openclaw_targets_manager import OpenClawTargetsManager
 from openclaw_voice_intent_router import route_openclaw_voice_intent
+from openclaw_productivity_intent_router import route_openclaw_productivity_voice_intent
 
 class AudioLoop:
     def __init__(self, video_mode=DEFAULT_MODE, on_audio_data=None, on_video_frame=None, on_cad_data=None, on_web_data=None, on_transcription=None, on_tool_confirmation=None, on_cad_status=None, on_cad_thought=None, on_project_update=None, on_device_update=None, on_simulation_update=None, on_error=None, input_device_index=None, input_device_name=None, output_device_index=None, kasa_agent=None):
@@ -1291,6 +1292,12 @@ class AudioLoop:
             self.pending_actions_manager,
             session_id="audio_loop",
         )
+        if not result.get("handled"):
+            result = route_openclaw_productivity_voice_intent(
+                transcript,
+                self.pending_actions_manager,
+                session_id="audio_loop",
+            )
         if not result.get("handled"):
             return None
 

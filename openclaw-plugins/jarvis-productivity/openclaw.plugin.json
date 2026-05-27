@@ -1,0 +1,41 @@
+{
+  "id": "jarvis-productivity",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Jarvis Productivity",
+  "description": "Executes Jarvis calendar and LinkedIn actions through OpenClaw gateway methods.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "googleCalendar": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "calendarId": { "type": "string" },
+          "accessToken": { "type": "string" }
+        }
+      },
+      "linkedin": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "accessToken": { "type": "string" },
+          "authorUrn": { "type": "string" },
+          "defaultVisibility": { "type": "string" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "googleCalendar.calendarId": {
+      "label": "Google Calendar ID",
+      "help": "Calendar id used by Jarvis. Use primary for the default calendar."
+    },
+    "linkedin.authorUrn": {
+      "label": "LinkedIn author URN",
+      "help": "LinkedIn member or organization URN used when Jarvis publishes posts."
+    }
+  }
+}

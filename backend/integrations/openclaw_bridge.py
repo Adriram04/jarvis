@@ -26,6 +26,15 @@ EXPECTED_OPENCLAW_SCHEMA = {
 SECRET_KEYWORDS = ("token", "secret", "password", "credential", "api_key", "apikey", "authorization", "cookie")
 MESSAGE_ACTIONS = {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply"}
 MESSAGE_READ_ACTIONS = {"read_conversation", "list_messages"}
+PRODUCTIVITY_ACTIONS = {
+    "list_calendar_events",
+    "create_calendar_event",
+    "update_calendar_event",
+    "delete_calendar_event",
+    "prepare_social_post",
+    "schedule_social_post",
+    "publish_social_post",
+}
 GENERIC_SUPPORTED_ACTIONS = {
     "search_email",
     "draft_email",
@@ -60,6 +69,10 @@ class OpenClawBridge:
         self.message_command = self._csv_env("JARVIS_OPENCLAW_MESSAGE_COMMAND", ["message", "send"])
         self.resolve_command = self._csv_env("JARVIS_OPENCLAW_RESOLVE_COMMAND", ["channels", "resolve"])
         self.generic_call_method = os.getenv("JARVIS_OPENCLAW_GENERIC_CALL_METHOD", "").strip()
+        self.productivity_call_method = os.getenv(
+            "JARVIS_OPENCLAW_PRODUCTIVITY_CALL_METHOD",
+            "jarvis.productivity.execute",
+        ).strip()
         self.require_resolve = self._env_bool("JARVIS_OPENCLAW_REQUIRE_RESOLVE", False)
 
         # Legacy HTTP compatibility.
@@ -106,6 +119,9 @@ class OpenClawBridge:
 
         if action_type in MESSAGE_READ_ACTIONS:
             return await self._read_messages_action(action_type, payload)
+
+        if action_type in PRODUCTIVITY_ACTIONS:
+            return await self._productivity_gateway_action(action_type, payload)
 
         if action_type in GENERIC_SUPPORTED_ACTIONS:
             return await self._generic_gateway_action(action_type, payload)
@@ -368,6 +384,34 @@ class OpenClawBridge:
             self.timeout_seconds,
         )
         return self._normalize_result(raw, action_type)
+
+    async def _productivity_gateway_action(self, action_type, payload):
+        if self.productivity_call_method:
+            params = {
+                "instruction": INTERNAL_OPENCLAW_INSTRUCTION,
+                "action_type": action_type,
+                "payload": payload or {},
+                "expected_response_schema": EXPECTED_OPENCLAW_SCHEMA,
+            }
+            raw = await self._run_cli(
+                self._build_gateway_call_args(self.productivity_call_method, params=params),
+                self.timeout_seconds,
+            )
+            if not self._contains_text(raw, "method not found"):
+                return self._normalize_result(raw, action_type)
+
+        if self.generic_call_method:
+            return await self._generic_gateway_action(action_type, payload)
+
+        return {
+            "success": False,
+            "service": "openclaw",
+            "action_type": action_type,
+            "summary": "La accion esta preparada en Jarvis, pero falta cargar el plugin OpenClaw jarvis-productivity o configurar un metodo generico.",
+            "raw": None,
+            "external_id": None,
+            "warnings": ["missing_openclaw_productivity_method"],
+        }
 
     async def _run_cli(self, command_args, timeout):
         command = [self.executable, *list(command_args or [])]

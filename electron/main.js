@@ -15,6 +15,27 @@ let openclawProcess;
 let openclawStartedByJarvis = false;
 let childCleanupStarted = false;
 
+const projectRoot = path.join(__dirname, '..');
+
+function loadDotEnv() {
+    const envPath = path.join(projectRoot, '.env');
+    if (!fs.existsSync(envPath)) return;
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!match || process.env[match[1]] !== undefined) continue;
+        let value = match[2].trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+        }
+        process.env[match[1]] = value;
+    }
+}
+
+loadDotEnv();
+
 const OPENCLAW_GATEWAY_PORT = Number(process.env.JARVIS_OPENCLAW_GATEWAY_PORT || process.env.OPENCLAW_GATEWAY_PORT || 18789);
 
 function envFlag(name, defaultValue) {
@@ -28,7 +49,6 @@ function resolvePythonExecutable() {
         return process.env.JARVIS_PYTHON;
     }
 
-    const projectRoot = path.join(__dirname, '..');
     const localVenvPython = process.platform === 'win32'
         ? path.join(projectRoot, 'venv', 'Scripts', 'python.exe')
         : path.join(projectRoot, 'venv', 'bin', 'python');

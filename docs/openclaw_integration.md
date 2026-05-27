@@ -168,6 +168,28 @@ No se exponen tokens, secretos ni credenciales. El bridge redacta campos sensibl
 
 Gmail, Calendar y redes quedan como fallback generico solo cuando exista comando o skill real de OpenClaw; Jarvis no inventa comandos.
 
+## Calendario y LinkedIn
+
+Jarvis carga el plugin local `openclaw-plugins/jarvis-productivity`, que expone:
+
+```bash
+openclaw gateway call jarvis.productivity.status --json
+openclaw gateway call jarvis.productivity.execute --params '{"action_type":"create_calendar_event","payload":{"dry_run":true,"title":"Demo","start":"2026-05-27T17:00:00+02:00","end":"2026-05-27T17:30:00+02:00"}}' --json
+```
+
+Variables necesarias para acciones reales:
+
+- `JARVIS_GOOGLE_CALENDAR_ACCESS_TOKEN`: token OAuth con permiso de Calendar; util para pruebas rapidas.
+- `JARVIS_GOOGLE_CALENDAR_REFRESH_TOKEN`, `JARVIS_GOOGLE_CALENDAR_CLIENT_ID`, `JARVIS_GOOGLE_CALENDAR_CLIENT_SECRET`: alternativa estable para que Jarvis renueve el token automaticamente.
+- `JARVIS_GOOGLE_CALENDAR_ID`: `primary` por defecto.
+- `JARVIS_LINKEDIN_ACCESS_TOKEN`: token OAuth con permisos de publicacion (`w_member_social` o `w_organization_social` segun el autor).
+- `JARVIS_LINKEDIN_AUTHOR_URN`: `urn:li:person:...` u organizacion autorizada.
+- `JARVIS_LINKEDIN_API_VERSION`: version de LinkedIn Marketing API en formato `YYYYMM`; por defecto `202605`.
+
+Calendario usa `POST https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events`. LinkedIn usa la Posts API actual `POST https://api.linkedin.com/rest/posts` con cabeceras `Linkedin-Version` y `X-Restli-Protocol-Version`.
+
+El arranque `npm run dev` lee `.env` y pasa esas variables a OpenClaw. Las acciones que escriben fuera, como crear eventos o publicar en LinkedIn, siguen pasando por pending actions y confirmacion de Jarvis.
+
 ## Demos
 
 Demo 1:

@@ -386,6 +386,38 @@ def test_generic_fallback_uses_gateway_call_method(monkeypatch):
     assert result["success"] is True
 
 
+def test_calendar_actions_use_productivity_gateway_method_by_default(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    monkeypatch.delenv("JARVIS_OPENCLAW_GENERIC_CALL_METHOD", raising=False)
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["args"] = args
+        return {"success": True, "stdout": json.dumps({"success": True, "details": "created"}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    result = asyncio.run(bridge.execute_action("create_calendar_event", {"title": "Demo"}))
+
+    assert seen["args"][:3] == ["gateway", "call", "jarvis.productivity.execute"]
+    assert result["success"] is True
+
+
+def test_social_actions_report_missing_productivity_method_when_plugin_absent(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    monkeypatch.delenv("JARVIS_OPENCLAW_GENERIC_CALL_METHOD", raising=False)
+    bridge = OpenClawBridge()
+
+    async def fake_run_cli(args, timeout):
+        return {"success": False, "stderr": "method not found", "returncode": 1, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    result = asyncio.run(bridge.execute_action("publish_social_post", {"platform": "linkedin", "content": "Hola"}))
+
+    assert result["success"] is False
+    assert result["warnings"] == ["missing_openclaw_productivity_method"]
+
+
 def test_file_not_found_returns_clean_message(monkeypatch):
     monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
     monkeypatch.setenv("JARVIS_OPENCLAW_EXECUTABLE", "definitely-not-openclaw")

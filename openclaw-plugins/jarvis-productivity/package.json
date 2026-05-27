@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-productivity",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "Jarvis productivity actions for calendar and LinkedIn through OpenClaw.",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

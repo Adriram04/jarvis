@@ -5,6 +5,28 @@ const path = require('path');
 const { execFileSync, execSync, spawn } = require('child_process');
 
 const projectRoot = path.resolve(__dirname, '..');
+
+function loadDotEnv() {
+    const envPath = path.join(projectRoot, '.env');
+    if (!fs.existsSync(envPath)) return;
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!match) continue;
+        const key = match[1];
+        if (process.env[key] !== undefined) continue;
+        let value = match[2].trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+        }
+        process.env[key] = value;
+    }
+}
+
+loadDotEnv();
+
 const gatewayPort = Number(process.env.JARVIS_OPENCLAW_GATEWAY_PORT || process.env.OPENCLAW_GATEWAY_PORT || 18789);
 const vitePort = Number(process.env.JARVIS_VITE_PORT || 5173);
 const children = new Set();
