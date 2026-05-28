@@ -1027,6 +1027,84 @@ async def _execute_confirmed_pending_action(action):
 
     return await _execute_openclaw_action(action_type, payload)
 
+async def _claim_and_execute_pending_action(action_id):
+    action, claim_state = pending_actions_manager.claim_action_for_execution(action_id)
+    if not action:
+        return _openclaw_local_result(
+            "confirm_pending_action",
+            "No encuentro esa accion pendiente.",
+            success=False,
+            warnings=["not_found"],
+        )
+
+    if claim_state == "executed":
+        return action.get("result") or _openclaw_local_result(
+            "confirm_pending_action",
+            "La accion pendiente ya estaba ejecutada.",
+            raw=action,
+            warnings=["already_executed"],
+        )
+
+    if claim_state == "executing":
+        return _openclaw_local_result(
+            "confirm_pending_action",
+            "La accion pendiente ya se esta ejecutando.",
+            raw=action,
+            warnings=["already_executing"],
+        )
+
+    if claim_state == "cancelled":
+        return _openclaw_local_result(
+            "confirm_pending_action",
+            "La accion pendiente ya estaba cancelada.",
+            success=False,
+            raw=action,
+            warnings=["already_cancelled"],
+        )
+
+    try:
+        result = await _execute_confirmed_pending_action(action)
+    except Exception as exc:
+        result = _openclaw_local_result(
+            action.get("action_type") or "confirm_pending_action",
+            f"No he podido ejecutar la accion pendiente: {str(exc)[:200]}",
+            success=False,
+            raw=action,
+            warnings=["handler_error"],
+        )
+    pending_actions_manager.mark_executed(action_id, result)
+    return result
+
+def _message_from_pending_result(result, success_fallback="Accion procesada correctamente."):
+    result = result or {}
+    if result.get("success"):
+        return result.get("summary") or success_fallback
+    return result.get("error") or result.get("summary") or "No he podido ejecutar la accion."
+
+async def _notify_pending_action_resolution(result, source="panel", room=None):
+    message = _message_from_pending_result(result)
+    await sio.emit('openclaw_pending_action', None, room=room)
+
+    session = getattr(audio_loop, "session", None) if audio_loop else None
+    if session:
+        try:
+            await session.send(
+                input=(
+                    "El usuario ha confirmado o resuelto una accion pendiente "
+                    f"desde {source}. La accion ya esta procesada. "
+                    f"Di verbalmente al usuario, en una sola frase breve, este resultado: {message}. "
+                    "No pidas mas confirmacion para esta accion."
+                ),
+                end_of_turn=True,
+            )
+            return
+        except Exception as exc:
+            print(f"[SERVER] Could not notify live Jarvis session about pending action resolution: {exc}")
+
+    await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=room)
+    if audio_loop and getattr(audio_loop, "project_manager", None):
+        audio_loop.project_manager.log_chat("JARVIS", message)
+
 def _autopilot_mutation_result(action_type, rule, label):
     if not rule:
         return _openclaw_local_result(action_type, "No encuentro esa regla.", success=False, warnings=["not_found"])
@@ -1528,10 +1606,8 @@ async def api_pending_actions():
 
 @app.post("/api/pending-actions/{action_id}/confirm")
 async def api_pending_action_confirm(action_id: str):
-    action = pending_actions_manager.confirm_action(action_id)
-    result = await _execute_confirmed_pending_action(action)
-    if action:
-        pending_actions_manager.mark_executed(action_id, result)
+    result = await _claim_and_execute_pending_action(action_id)
+    await _notify_pending_action_resolution(result, source="dashboard_button")
     return result
 
 @app.post("/api/pending-actions/{action_id}/cancel")
@@ -1539,7 +1615,9 @@ async def api_pending_action_cancel(action_id: str):
     action = pending_actions_manager.cancel_action(action_id)
     if not action:
         return _openclaw_local_result("cancel_pending_action", "No encuentro esa accion pendiente.", success=False, warnings=["not_found"])
-    return _openclaw_local_result("cancel_pending_action", "Accion pendiente cancelada.", raw=action)
+    result = _openclaw_local_result("cancel_pending_action", "Accion pendiente cancelada.", raw=action)
+    await _notify_pending_action_resolution(result, source="dashboard_button")
+    return result
 
 @app.get("/api/openclaw/autopilot/rules")
 async def api_openclaw_autopilot_rules():
@@ -1899,20 +1977,13 @@ async def confirm_tool(sid, data):
     pending = pending_actions_manager.get_action(request_id)
     if pending:
         if not confirmed:
-            pending_actions_manager.cancel_action(request_id)
-            await sio.emit('transcription', {'sender': 'JARVIS', 'text': 'Accion cancelada.', 'append': False}, room=sid)
-            await sio.emit('openclaw_pending_action', None)
+            action = pending_actions_manager.cancel_action(request_id)
+            result = _openclaw_local_result("cancel_pending_action", "Accion cancelada.", raw=action)
+            await _notify_pending_action_resolution(result, source="confirmation_popup", room=sid)
             return
 
-        action = pending_actions_manager.confirm_action(request_id)
-        result = await _execute_confirmed_pending_action(action)
-        pending_actions_manager.mark_executed(request_id, result)
-        if result.get("success"):
-            message = result.get("summary") or "Accion ejecutada correctamente."
-        else:
-            message = result.get("error") or result.get("summary") or "No he podido ejecutar la accion."
-        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
-        await sio.emit('openclaw_pending_action', None)
+        result = await _claim_and_execute_pending_action(request_id)
+        await _notify_pending_action_resolution(result, source="confirmation_popup", room=sid)
         return
     
     if audio_loop:
@@ -1940,27 +2011,17 @@ async def _handle_text_pending_confirmation(sid, text):
 
     pending = pending_actions[0]
     if wants_cancel:
-        pending_actions_manager.cancel_action(pending["id"])
-        message = "Accion cancelada."
-        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
-        await sio.emit('openclaw_pending_action', None)
+        action = pending_actions_manager.cancel_action(pending["id"])
+        result = _openclaw_local_result("cancel_pending_action", "Accion cancelada.", raw=action)
         if audio_loop and audio_loop.project_manager:
             audio_loop.project_manager.log_chat("User", text)
-            audio_loop.project_manager.log_chat("JARVIS", message)
+        await _notify_pending_action_resolution(result, source="spoken_confirmation", room=sid)
         return True
 
-    action = pending_actions_manager.confirm_action(pending["id"])
-    result = await _execute_confirmed_pending_action(action)
-    pending_actions_manager.mark_executed(pending["id"], result)
-    if result.get("success"):
-        message = result.get("summary") or "Accion ejecutada correctamente."
-    else:
-        message = result.get("error") or result.get("summary") or "No he podido ejecutar la accion."
-    await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=sid)
-    await sio.emit('openclaw_pending_action', None)
+    result = await _claim_and_execute_pending_action(pending["id"])
     if audio_loop and audio_loop.project_manager:
         audio_loop.project_manager.log_chat("User", text)
-        audio_loop.project_manager.log_chat("JARVIS", message)
+    await _notify_pending_action_resolution(result, source="spoken_confirmation", room=sid)
     return True
 
 @sio.event

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Maximize2, Minus, X } from 'lucide-react';
+import { Activity, FolderKanban, Maximize2, Minus, X } from 'lucide-react';
 import AgendaPanel from './AgendaPanel';
 import CommandBar from './CommandBar';
 import IntegrationsPanel from './IntegrationsPanel';
@@ -160,6 +160,20 @@ const JarvisDashboard = ({
     const jarvisMessages = messages.filter(message => String(message.sender || '').toLowerCase().match(/jarvis|assistant/)).length;
     const latestMessage = messages[messages.length - 1];
     const nextEvent = agenda[0];
+    const projectCount = runtime.projects?.length || 0;
+
+    const renderActiveProjectPanel = () => (
+        <section className="jarvis-panel jarvis-current-project-panel">
+            <div className="jarvis-panel-header compact">
+                <div className="jarvis-panel-title">Proyecto actual activo</div>
+                <button type="button" onClick={() => onModuleChange('projects')}>
+                    <FolderKanban size={14} /> Ver
+                </button>
+            </div>
+            <strong>{runtime.currentProject || 'No disponible'}</strong>
+            <span>{projectCount ? `${projectCount} proyecto(s) detectado(s)` : 'Sin datos de proyectos'}</span>
+        </section>
+    );
 
     const renderContextPanel = () => {
         if (activeModule === 'chat') {
@@ -316,6 +330,7 @@ const JarvisDashboard = ({
                         <span>{dateLabel}</span>
                     </div>
 
+                    {renderActiveProjectPanel()}
                     {renderContextPanel()}
                 </aside>
             </section>

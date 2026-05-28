@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Check, Clipboard, RotateCcw, X } from 'lucide-react';
 import CommandBar from '../CommandBar';
 
@@ -24,7 +24,6 @@ const ChatModule = ({ context, actions }) => {
         isListening,
         isMuted,
         messages,
-        openClawEvents,
         pendingActions,
         setInputValue,
         socketConnected,
@@ -33,11 +32,7 @@ const ChatModule = ({ context, actions }) => {
 
     useEffect(() => {
         timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' });
-    }, [messages, pendingActions, openClawEvents]);
-
-    const relevantEvents = useMemo(() => openClawEvents
-        .filter(event => event.message || event.error || event.display_target)
-        .slice(0, 4), [openClawEvents]);
+    }, [messages, pendingActions]);
 
     const stateText = !socketConnected
         ? 'Desconectado'
@@ -93,15 +88,6 @@ const ChatModule = ({ context, actions }) => {
                         </article>
                     ))}
 
-                    {relevantEvents.map(event => (
-                        <article className="jarvis-chat-entry tool" key={event.id}>
-                            <div className="jarvis-chat-meta">
-                                <strong>Evento de herramienta</strong>
-                                <time>{event.timestamp || ''}</time>
-                            </div>
-                            <p>{event.message || event.error || event.display_target || 'Sin datos'}</p>
-                        </article>
-                    ))}
                 </div>
 
                 <aside className="jarvis-chat-side">

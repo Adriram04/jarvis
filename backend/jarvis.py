@@ -479,7 +479,7 @@ class AudioLoop:
         self._local_openclaw_intent_debounce_seconds = self._float_env("JARVIS_WHATSAPP_VOICE_INTENT_DEBOUNCE_SECONDS", 1.0)
         self._suppress_model_output_until = 0.0
         self._input_echo_guard_enabled = self._env_bool("JARVIS_INPUT_ECHO_GUARD_ENABLED", True)
-        self._echo_audio_cooldown_seconds = self._float_env("JARVIS_INPUT_ECHO_AUDIO_COOLDOWN_SECONDS", 1.2)
+        self._echo_audio_cooldown_seconds = self._float_env("JARVIS_INPUT_ECHO_AUDIO_COOLDOWN_SECONDS", 2.5)
         self._model_audio_active_until = 0.0
         self._recent_model_output_text = ""
         self._recent_model_output_until = 0.0
@@ -651,6 +651,11 @@ class AudioLoop:
         if time.time() < getattr(self, "_model_audio_active_until", 0.0):
             return True
         return self._input_looks_like_recent_model_output(transcript)
+
+    def _should_block_live_input_audio(self):
+        if not getattr(self, "_input_echo_guard_enabled", True):
+            return False
+        return time.time() < getattr(self, "_model_audio_active_until", 0.0)
 
     async def send_frame(self, frame_data):
         # Update the latest frame payload received from the frontend webcam.
@@ -871,6 +876,11 @@ class AudioLoop:
 
                 try:
                     data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
+
+                    if self._should_block_live_input_audio():
+                        self._is_speaking = False
+                        self._silence_start_time = None
+                        continue
 
                     # 1. Send Audio
                     if self.out_queue:
@@ -1389,7 +1399,7 @@ class AudioLoop:
         return await self.openclaw_bridge.execute_action(action_type, external_payload)
 
     async def _confirm_pending_openclaw_action(self, action_id):
-        action = self.pending_actions_manager.confirm_action(action_id)
+        action, claim_state = self.pending_actions_manager.claim_action_for_execution(action_id)
         if not action:
             return self._openclaw_local_result(
                 "confirm_pending_action",
@@ -1398,9 +1408,43 @@ class AudioLoop:
                 warnings=["not_found"],
             )
 
+        if claim_state == "executed":
+            return action.get("result") or self._openclaw_local_result(
+                "confirm_pending_action",
+                "La accion pendiente ya estaba ejecutada.",
+                raw=action,
+                warnings=["already_executed"],
+            )
+
+        if claim_state == "executing":
+            return self._openclaw_local_result(
+                "confirm_pending_action",
+                "La accion pendiente ya se esta ejecutando.",
+                raw=action,
+                warnings=["already_executing"],
+            )
+
+        if claim_state == "cancelled":
+            return self._openclaw_local_result(
+                "confirm_pending_action",
+                "La accion pendiente ya estaba cancelada.",
+                success=False,
+                raw=action,
+                warnings=["already_cancelled"],
+            )
+
         action_type = action.get("action_type")
         payload = action.get("payload") or {}
-        result = await self._execute_confirmed_pending_action(action_type, payload)
+        try:
+            result = await self._execute_confirmed_pending_action(action_type, payload)
+        except Exception as exc:
+            result = self._openclaw_local_result(
+                action_type or "confirm_pending_action",
+                f"No he podido ejecutar la accion pendiente: {str(exc)[:200]}",
+                success=False,
+                raw=action,
+                warnings=["handler_error"],
+            )
         self.pending_actions_manager.mark_executed(action["id"], result)
         return result
 

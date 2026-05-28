@@ -789,6 +789,25 @@
     padding: 16px;
 }
 
+.jarvis-current-project-panel {
+    display: grid;
+    gap: 6px;
+    padding: 14px;
+}
+
+.jarvis-current-project-panel strong {
+    overflow: hidden;
+    color: var(--jarvis-text);
+    font-size: 19px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jarvis-current-project-panel span {
+    color: var(--jarvis-muted);
+    font-size: 12px;
+}
+
 .jarvis-panel-header {
     display: flex;
     align-items: center;

@@ -39,6 +39,17 @@ import {
 const socket = io('http://localhost:8000');
 const { ipcRenderer } = window.require('electron');
 
+const mergeStreamingText = (previous = '', next = '') => {
+    if (!previous || !next) return `${previous}${next}`;
+    if (/\s$/.test(previous) || /^\s/.test(next)) return `${previous}${next}`;
+
+    const previousTail = previous.slice(-1);
+    const nextHead = next.charAt(0);
+    const needsSentenceGap = /[A-Za-zÀ-ÿ0-9'"’”)\]]/.test(previousTail) && /[A-ZÁÉÍÓÚÜÑ¿¡]/.test(nextHead);
+
+    return `${previous}${needsSentenceGap ? ' ' : ''}${next}`;
+};
+
 function App() {
     const [status, setStatus] = useState('Disconnected');
     const [socketConnected, setSocketConnected] = useState(socket.connected); // Track socket connection reactively
@@ -733,7 +744,7 @@ function App() {
                         ...prev.slice(0, -1),
                         {
                             ...lastMsg,
-                            text: lastMsg.text + data.text
+                            text: mergeStreamingText(lastMsg.text, data.text)
                         }
                     ];
                 } else {
@@ -1860,7 +1871,10 @@ function App() {
 
     const handleConfirmDashboardPending = async (id) => {
         const response = await confirmPendingAction(id);
-        if (!response.ok && !response.success) {
+        if (confirmationRequest?.id === id) {
+            setConfirmationRequest(null);
+        }
+        if (!response.ok || !response.success) {
             addMessage('System', response.error || 'No se pudo confirmar la acción pendiente.');
         }
         await Promise.all([refreshPendingActions(), refreshOpenClawEvents(), refreshCalendarEvents()]);
@@ -1868,7 +1882,10 @@ function App() {
 
     const handleCancelDashboardPending = async (id) => {
         const response = await cancelPendingAction(id);
-        if (!response.ok && !response.success) {
+        if (confirmationRequest?.id === id) {
+            setConfirmationRequest(null);
+        }
+        if (!response.ok || !response.success) {
             addMessage('System', response.error || 'No se pudo cancelar la acción pendiente.');
         }
         await Promise.all([refreshPendingActions(), refreshOpenClawEvents()]);

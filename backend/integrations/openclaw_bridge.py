@@ -102,7 +102,7 @@ class OpenClawBridge:
 
     async def execute_action(self, action_type, payload):
         action_type = str(action_type or "").strip()
-        payload = payload or {}
+        payload = self._normalize_action_payload(action_type, payload or {})
 
         if not self.is_enabled():
             return self._disabled_result(action_type)
@@ -127,6 +127,37 @@ class OpenClawBridge:
             return await self._generic_gateway_action(action_type, payload)
 
         return self._missing_method_result(action_type)
+
+    def _normalize_action_payload(self, action_type, payload):
+        payload = deepcopy(payload or {}) if isinstance(payload, dict) else {}
+
+        if action_type in {"create_calendar_event", "update_calendar_event", "delete_calendar_event"}:
+            nested = payload.get("payload")
+            if isinstance(nested, dict):
+                metadata = {
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {"payload", "calendar_action"}
+                }
+                payload = {**metadata, **nested}
+
+            for key in ("start", "end", "start_time", "end_time", "startTime", "endTime"):
+                value = payload.get(key)
+                if isinstance(value, dict):
+                    payload[key] = (
+                        value.get("dateTime")
+                        or value.get("date_time")
+                        or value.get("datetime")
+                        or value.get("date")
+                        or value.get("value")
+                    )
+
+            if payload.get("summary") and not payload.get("title"):
+                payload["title"] = payload.get("summary")
+            if payload.get("timeZone") and not payload.get("time_zone"):
+                payload["time_zone"] = payload.get("timeZone")
+
+        return payload
 
     async def execute_autopilot_reply(self, rule, incoming_message):
         incoming_message = incoming_message or {}

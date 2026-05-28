@@ -55,6 +55,21 @@ class PendingActionsManager:
                 self._save()
             return deepcopy(action)
 
+    def claim_action_for_execution(self, action_id):
+        with self._lock:
+            action = self._find_action(action_id)
+            if not action:
+                return None, "not_found"
+
+            status = action.get("status") or "pending"
+            if status in {"pending", "confirmed"}:
+                action["status"] = "executing"
+                action["confirmed_at"] = _now_iso()
+                self._save()
+                return deepcopy(action), "claimed"
+
+            return deepcopy(action), status
+
     def cancel_action(self, action_id):
         with self._lock:
             action = self._find_action(action_id)
@@ -117,10 +132,13 @@ def confirm_action(action_id):
     return pending_actions_manager.confirm_action(action_id)
 
 
+def claim_action_for_execution(action_id):
+    return pending_actions_manager.claim_action_for_execution(action_id)
+
+
 def cancel_action(action_id):
     return pending_actions_manager.cancel_action(action_id)
 
 
 def mark_executed(action_id, result):
     return pending_actions_manager.mark_executed(action_id, result)
-
