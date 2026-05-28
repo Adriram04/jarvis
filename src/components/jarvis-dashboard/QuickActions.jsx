@@ -1,17 +1,18 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     Box,
     CalendarPlus,
     Camera,
+    ChevronDown,
+    ChevronUp,
     Cpu,
     FileText,
     Hand,
     Linkedin,
     Lightbulb,
+    MessageCircle,
     PlusSquare,
     Printer,
-    Settings,
-    ShieldCheck,
     Webcam,
 } from 'lucide-react';
 
@@ -26,17 +27,32 @@ const actions = [
     { id: 'toggle-kasa', label: 'Kasa', icon: Lightbulb },
     { id: 'toggle-printer', label: 'Impresión 3D', icon: Printer },
     { id: 'toggle-simulation', label: 'Simulación', icon: Cpu },
-    { id: 'toggle-openclaw', label: 'OpenClaw', icon: ShieldCheck },
+    { id: 'toggle-openclaw', label: 'WhatsApp', icon: MessageCircle },
     { id: 'open-notes', label: 'Notas', icon: FileText },
-    { id: 'settings', label: 'Ajustes', icon: Settings },
 ];
 
 const QuickActions = ({ onAction }) => {
+    const [expanded, setExpanded] = useState(false);
+    const visibleActions = expanded ? actions : actions.slice(0, 5);
+    const hiddenCount = Math.max(0, actions.length - visibleActions.length);
+
     return (
         <section className="jarvis-panel jarvis-quick-actions">
-            <div className="jarvis-panel-title">Acciones rápidas</div>
+            <div className="jarvis-panel-header compact">
+                <div className="jarvis-panel-title">Acciones rápidas</div>
+                {actions.length > 5 && (
+                    <button
+                        type="button"
+                        className="jarvis-expand-button"
+                        onClick={() => setExpanded(prev => !prev)}
+                    >
+                        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {expanded ? 'Mostrar menos' : `Ver más (${hiddenCount})`}
+                    </button>
+                )}
+            </div>
             <div className="jarvis-action-grid">
-                {actions.map((action) => {
+                {visibleActions.map((action) => {
                     const Icon = action.icon;
                     return (
                         <button key={action.id} type="button" onClick={() => onAction(action.id)}>

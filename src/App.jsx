@@ -95,6 +95,7 @@ function App() {
     const [dashboardError, setDashboardError] = useState({});
     const [showCalendarEventModal, setShowCalendarEventModal] = useState(false);
     const [showLinkedInPostModal, setShowLinkedInPostModal] = useState(false);
+    const [activeModule, setActiveModule] = useState('home');
 
 
     // RESTORED STATE
@@ -254,7 +255,7 @@ function App() {
 
     const refreshCalendarEvents = useCallback(async () => {
         setDashboardSectionLoading('calendar', true);
-        const response = await listCalendarEvents(5);
+        const response = await listCalendarEvents(20);
         if (response.success) {
             const events = extractCalendarItems(response)
                 .map(normalizeCalendarEvent)
@@ -321,24 +322,19 @@ function App() {
 
         setIntegrationStatuses([
             {
-                name: 'Backend',
-                shortName: 'API',
-                state: backendRes.ok ? 'connected' : 'error',
-                meta: backendRes.ok ? 'Online' : backendRes.error || 'No disponible',
-                tone: backendRes.ok ? 'green' : '',
-            },
-            {
                 name: 'OpenClaw',
                 shortName: 'OC',
                 state: openClawRes.success ? 'connected' : 'error',
-                meta: openClawRes.success ? (openClawRes.data?.data?.summary || openClawRes.data?.summary || 'Online') : responseError(openClawRes, 'No disponible'),
+                meta: openClawRes.success ? 'OK' : 'Offline',
+                shortStatus: openClawRes.success ? 'OK' : 'Offline',
                 tone: openClawRes.success ? 'cyan' : '',
             },
             {
                 name: 'Google Calendar',
                 shortName: '31',
                 state: calendarRes.success ? 'connected' : 'error',
-                meta: calendarRes.success ? 'Disponible' : responseError(calendarRes, 'No configurado'),
+                meta: calendarRes.success ? 'Disponible' : 'No configurado',
+                shortStatus: calendarRes.success ? 'OK' : 'No config.',
                 tone: calendarRes.success ? 'green' : '',
             },
             {
@@ -346,15 +342,17 @@ function App() {
                 shortName: 'in',
                 state: linkedinRes.success && linkedinConfigured ? 'connected' : (linkedinRes.success ? 'unknown' : 'error'),
                 meta: linkedinRes.success
-                    ? (linkedinConfigured ? 'Dry-run configurado' : 'Dry-run disponible, configuración no confirmada')
-                    : responseError(linkedinRes, 'No configurado'),
+                    ? (linkedinConfigured ? 'Configurado' : 'No confirmado')
+                    : 'No configurado',
+                shortStatus: linkedinRes.success && linkedinConfigured ? 'OK' : 'No config.',
                 tone: linkedinRes.success && linkedinConfigured ? 'cyan' : '',
             },
             {
                 name: 'WhatsApp',
                 shortName: 'WA',
                 state: openClawRes.success ? 'connected' : 'error',
-                meta: openClawRes.success ? 'Vía OpenClaw' : responseError(openClawRes, 'No disponible'),
+                meta: openClawRes.success ? 'OK' : 'Offline',
+                shortStatus: openClawRes.success ? 'OK' : 'Offline',
                 tone: openClawRes.success ? 'green' : '',
             },
         ]);
@@ -1701,6 +1699,24 @@ function App() {
         toggleMute();
     };
 
+    const discoverKasaDevices = () => {
+        socket.emit('discover_kasa');
+    };
+
+    const controlKasaDevice = (ip, action, value) => {
+        if (!ip || !action) return;
+        socket.emit('control_kasa', { ip, action, value });
+    };
+
+    const runWebAgentPrompt = (prompt) => {
+        const text = String(prompt || '').trim();
+        if (!text) return;
+        setShowBrowserWindow(true);
+        bringToFront('browser');
+        socket.emit('prompt_web_agent', { prompt: text });
+        addMessage('System', `Web Agent ejecutando: ${text}`);
+    };
+
     const handleDashboardQuickAction = async (actionId) => {
         switch (actionId) {
             case 'create-event':
@@ -1826,28 +1842,63 @@ function App() {
     const statusValue = (enabled, yes, no) => enabled ? yes : no;
     const openClawOnline = Boolean(openClawStatus?.success);
     const backendOnline = Boolean(backendStatus?.ok);
-    const connectedIntegrations = integrationStatuses.filter(item => item.state === 'connected');
+    const backendSystem = backendStatus?.data?.system || backendStatus?.raw?.system || {};
+    const cpuInfo = backendSystem?.cpu || {};
+    const memoryInfo = backendSystem?.memory || {};
+    const cpuPercent = Number.isFinite(Number(cpuInfo.percent)) ? Number(cpuInfo.percent) : null;
+    const memoryPercent = Number.isFinite(Number(memoryInfo.percent)) ? Number(memoryInfo.percent) : null;
+
+    const formatBytes = (bytes) => {
+        const value = Number(bytes);
+        if (!Number.isFinite(value) || value <= 0) return null;
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+        return `${(value / (1024 ** index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+    };
+
+    const memoryDetail = memoryInfo.used_bytes && memoryInfo.total_bytes
+        ? `${formatBytes(memoryInfo.used_bytes)} / ${formatBytes(memoryInfo.total_bytes)}`
+        : memoryInfo.error || 'No disponible';
+    const processorDetail = [
+        cpuInfo.processor,
+        cpuInfo.cores ? `${cpuInfo.cores} cores` : null,
+    ].filter(Boolean).join(' · ') || 'No disponible';
+    const integrationByName = new Map(integrationStatuses.map(item => [item.name, item]));
+    const connectionNames = [
+        ['OpenClaw', 'OpenClaw'],
+        ['WhatsApp', 'WhatsApp'],
+        ['Google Calendar', 'Calendar'],
+        ['LinkedIn', 'LinkedIn'],
+    ];
 
     const dashboardData = {
         systemItems: [
             { label: 'Backend', value: backendStatus ? statusValue(backendOnline, 'Online', 'Offline') : 'Sin datos', connected: backendOnline, detail: dashboardError.backend || 'GET /status' },
             { label: 'Socket', value: statusValue(socketConnected, 'Online', 'Offline'), connected: socketConnected, detail: 'Socket.IO' },
-            { label: 'Modelo', value: status || 'Sin datos', connected: isConnected, detail: isConnected ? 'Audio inicializado' : 'Modelo parado' },
-            { label: 'Audio', value: isConnected ? statusValue(!isMuted, 'Activo', 'Pausado') : 'No disponible', connected: isConnected && !isMuted },
-            { label: 'Cámara', value: statusValue(isVideoOn, 'Activa', 'Inactiva'), connected: isVideoOn, detail: isVideoOn && fps ? `${fps} FPS` : undefined },
-            { label: 'Gestos', value: statusValue(isHandTrackingEnabled, 'Activos', 'Inactivos'), connected: isHandTrackingEnabled },
-            { label: 'Face Auth', value: statusValue(faceAuthEnabled, 'Activo', 'Inactivo'), connected: faceAuthEnabled },
-            { label: 'Proyecto', value: currentProject || 'No disponible', connected: Boolean(currentProject) },
-            { label: 'Impresoras', value: printerCount ? String(printerCount) : '0', connected: printerCount > 0, detail: printerCount ? 'Detectadas' : 'Sin impresoras detectadas' },
-            { label: 'Kasa', value: String(kasaDevices.length), connected: kasaDevices.length > 0, detail: kasaDevices.length ? 'Dispositivos detectados' : 'Sin dispositivos' },
+            {
+                label: 'RAM',
+                value: memoryPercent !== null ? `${memoryPercent}%` : 'No disponible',
+                connected: memoryPercent !== null,
+                detail: memoryDetail,
+                percent: memoryPercent,
+            },
+            {
+                label: 'Procesador',
+                value: cpuPercent !== null ? `${cpuPercent}%` : 'No disponible',
+                connected: cpuPercent !== null,
+                detail: processorDetail,
+                percent: cpuPercent,
+            },
         ],
-        connections: connectedIntegrations.length > 0
-            ? connectedIntegrations.map(item => ({ label: item.name, value: item.meta, connected: true, tone: item.tone || 'green' }))
-            : [
-                { label: 'OpenClaw', value: openClawStatus ? statusValue(openClawOnline, 'Online', 'Error') : 'Sin datos', connected: openClawOnline },
-                { label: 'Calendar', value: 'No configurado', connected: false },
-                { label: 'LinkedIn', value: 'No configurado', connected: false },
-            ],
+        connections: connectionNames.map(([sourceName, label]) => {
+            const item = integrationByName.get(sourceName);
+            return {
+                label,
+                value: item?.shortStatus || item?.meta || 'Sin datos',
+                connected: item?.state === 'connected',
+                tone: item?.tone || '',
+            };
+        }),
         agenda: calendarEvents,
         pendingActions,
         integrations: integrationStatuses,
@@ -1891,9 +1942,7 @@ function App() {
                 title: 'Face Auth',
                 state: faceAuthEnabled ? 'Activo' : 'Inactivo',
                 stateTone: faceAuthEnabled ? 'green' : '',
-                description: 'Autenticación facial configurable desde ajustes.',
-                primaryAction: 'settings',
-                primaryLabel: 'Ajustes',
+                description: 'Autenticación facial configurable desde el perfil.',
             },
             {
                 id: 'cad',
@@ -1952,16 +2001,40 @@ function App() {
             {
                 id: 'openclaw',
                 icon: 'openclaw',
-                title: 'OpenClaw',
+                title: 'WhatsApp',
                 state: openClawOnline ? 'Online' : (openClawStatus ? 'Error' : 'Sin datos'),
                 stateTone: openClawOnline ? 'green' : '',
-                description: 'WhatsApp, automatizaciones, Calendar, LinkedIn y acciones externas.',
+                description: 'Mensajería y automatizaciones mediante Gateway.',
                 primaryAction: 'toggle-openclaw',
                 primaryLabel: showOpenClawDashboard ? 'Cerrar' : 'Abrir',
             },
         ],
         loading: dashboardLoading,
         errors: dashboardError,
+        runtime: {
+            activePrintStatus,
+            backendStatus,
+            browserData,
+            currentProject,
+            faceAuthEnabled,
+            fps,
+            isConnected,
+            isHandTrackingEnabled,
+            isMuted,
+            isVideoOn,
+            kasaDevices,
+            openClawStatus,
+            printerCount,
+            showBrowserWindow,
+            showCadWindow,
+            showKasaWindow,
+            showPrinterWindow,
+            showSimulationDashboard,
+            simulationState,
+            slicingStatus,
+            socketConnected,
+            status,
+        },
     };
 
 
@@ -1969,6 +2042,7 @@ function App() {
     return (
         <div className="jarvis-runtime-shell">
             <JarvisDashboard
+                activeModule={activeModule}
                 currentTime={currentTime}
                 status={status}
                 socketConnected={socketConnected}
@@ -1980,9 +2054,11 @@ function App() {
                 faceAuthEnabled={faceAuthEnabled}
                 inputValue={inputValue}
                 setInputValue={setInputValue}
+                messages={messages}
                 onCommandSubmit={submitCommand}
                 onToggleListening={toggleDashboardListening}
                 onQuickAction={handleDashboardQuickAction}
+                onModuleChange={setActiveModule}
                 onOpenSettings={() => setShowSettings(true)}
                 onMinimize={handleMinimize}
                 onMaximize={handleMaximize}
@@ -1995,6 +2071,11 @@ function App() {
                 onRefreshIntegrations={refreshIntegrationStatuses}
                 onConfirmPending={handleConfirmDashboardPending}
                 onCancelPending={handleCancelDashboardPending}
+                onPrepareLinkedInPost={handlePrepareLinkedInPost}
+                onPublishLinkedInPost={handlePublishLinkedInPost}
+                onDiscoverKasa={discoverKasaDevices}
+                onControlKasa={controlKasaDevice}
+                onRunWebAgent={runWebAgentPrompt}
             />
 
             <CalendarEventModal

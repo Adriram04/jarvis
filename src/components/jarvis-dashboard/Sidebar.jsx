@@ -1,28 +1,37 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     CalendarDays,
     CheckSquare,
-    Grid3X3,
+    Cpu,
+    Eye,
     Home,
-    Mail,
     MessageCircle,
     Settings,
     Share2,
     Sparkles,
+    Box,
+    Globe,
+    Lightbulb,
 } from 'lucide-react';
+import ProfilePanel from './ProfilePanel';
 
 const navigationItems = [
-    { label: 'Inicio', icon: Home, active: true },
-    { label: 'Chat', icon: MessageCircle },
-    { label: 'Agenda', icon: CalendarDays },
-    { label: 'Tareas', icon: CheckSquare },
-    { label: 'Email', icon: Mail },
-    { label: 'Social', icon: Share2 },
-    { label: 'Apps', icon: Grid3X3 },
-    { label: 'Ajustes', icon: Settings },
+    { id: 'home', label: 'Inicio', icon: Home },
+    { id: 'chat', label: 'Chat', icon: MessageCircle },
+    { id: 'calendar', label: 'Agenda', icon: CalendarDays },
+    { id: 'actions', label: 'Acciones', icon: CheckSquare },
+    { id: 'social', label: 'Social', icon: Share2 },
+    { id: 'vision', label: 'Visión', icon: Eye },
+    { id: 'cad3d', label: 'CAD / 3D', icon: Box },
+    { id: 'devices', label: 'Dispositivos', icon: Lightbulb },
+    { id: 'web', label: 'Web Agent', icon: Globe },
+    { id: 'system', label: 'Sistema', icon: Cpu },
+    { id: 'settings', label: 'Ajustes', icon: Settings },
 ];
 
-const Sidebar = ({ onOpenSettings }) => {
+const Sidebar = ({ activeModule, onModuleChange }) => {
+    const [showProfilePrefs, setShowProfilePrefs] = useState(false);
+
     return (
         <aside className="jarvis-sidebar">
             <div className="jarvis-brand">
@@ -38,14 +47,13 @@ const Sidebar = ({ onOpenSettings }) => {
             <nav className="jarvis-nav" aria-label="Navegacion principal">
                 {navigationItems.map((item) => {
                     const Icon = item.icon;
-                    const handleClick = item.label === 'Ajustes' ? onOpenSettings : undefined;
 
                     return (
                         <button
                             key={item.label}
                             type="button"
-                            className={`jarvis-nav-item ${item.active ? 'is-active' : ''}`}
-                            onClick={handleClick}
+                            className={`jarvis-nav-item ${activeModule === item.id ? 'is-active' : ''}`}
+                            onClick={() => onModuleChange(item.id)}
                         >
                             <Icon size={20} />
                             <span>{item.label}</span>
@@ -54,12 +62,20 @@ const Sidebar = ({ onOpenSettings }) => {
                 })}
             </nav>
 
-            <div className="jarvis-user-status">
-                <div className="jarvis-user-avatar">A</div>
-                <div className="jarvis-user-copy">
-                    <strong>Adrián</strong>
-                    <span><Sparkles size={11} /> Modo Productividad</span>
-                </div>
+            <div className="jarvis-sidebar-profile">
+                <button
+                    type="button"
+                    className={`jarvis-user-status ${showProfilePrefs ? 'is-active' : ''}`}
+                    onClick={() => setShowProfilePrefs(prev => !prev)}
+                    aria-expanded={showProfilePrefs}
+                >
+                    <div className="jarvis-user-avatar">A</div>
+                    <div className="jarvis-user-copy">
+                        <strong>Adrián</strong>
+                        <span><Sparkles size={11} /> Modo Productividad</span>
+                    </div>
+                </button>
+                <ProfilePanel expanded={showProfilePrefs} />
             </div>
         </aside>
     );

@@ -1,15 +1,17 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     Box,
     Camera,
+    ChevronDown,
+    ChevronUp,
     Cpu,
     Fingerprint,
     Globe,
     Hand,
     Lightbulb,
+    MessageCircle,
     Mic,
     Printer,
-    ShieldCheck,
 } from 'lucide-react';
 
 const iconMap = {
@@ -22,17 +24,31 @@ const iconMap = {
     kasa: Lightbulb,
     printer: Printer,
     simulation: Cpu,
-    openclaw: ShieldCheck,
+    openclaw: MessageCircle,
 };
 
 const CapabilitiesPanel = ({ capabilities = [], onAction }) => {
+    const [expanded, setExpanded] = useState(false);
+    const visibleCapabilities = expanded ? capabilities : capabilities.slice(0, 5);
+    const hiddenCount = Math.max(0, capabilities.length - visibleCapabilities.length);
+
     return (
         <section className="jarvis-panel jarvis-capabilities">
             <div className="jarvis-panel-header compact">
                 <div className="jarvis-panel-title">Centro de capacidades</div>
+                {capabilities.length > 5 && (
+                    <button
+                        type="button"
+                        className="jarvis-expand-button"
+                        onClick={() => setExpanded(prev => !prev)}
+                    >
+                        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {expanded ? 'Mostrar menos' : `Ver todas (${hiddenCount})`}
+                    </button>
+                )}
             </div>
             <div className="jarvis-capability-grid">
-                {capabilities.map((item) => {
+                {visibleCapabilities.map((item) => {
                     const Icon = iconMap[item.icon] || Cpu;
                     return (
                         <article className="jarvis-capability-card" key={item.id}>

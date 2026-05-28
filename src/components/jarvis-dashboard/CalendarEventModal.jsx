@@ -58,7 +58,7 @@ const CalendarEventModal = ({ open, onClose, onCreate, onDryRun }) => {
                 <header>
                     <div>
                         <h2>Crear evento</h2>
-                        <p>Google Calendar mediante OpenClaw.</p>
+                        <p>Google Calendar mediante Jarvis.</p>
                     </div>
                     <button type="button" onClick={onClose}><X size={18} /></button>
                 </header>

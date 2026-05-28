@@ -68,6 +68,11 @@ const SettingsWindow = ({
 }) => {
     const [permissions, setPermissions] = useState({});
     const [faceAuthEnabled, setFaceAuthEnabled] = useState(false);
+    const handleClose = (event) => {
+        event?.preventDefault();
+        event?.stopPropagation();
+        onClose?.();
+    };
 
     useEffect(() => {
         // Request initial permissions
@@ -119,10 +124,21 @@ const SettingsWindow = ({
     };
 
     return (
-        <div className="absolute top-20 right-10 bg-black/90 border border-cyan-500/50 p-4 rounded-lg z-50 w-80 backdrop-blur-xl shadow-[0_0_30px_rgba(6,182,212,0.2)]">
+        <div
+            className="fixed top-20 right-10 bg-black/90 border border-cyan-500/50 p-4 rounded-lg z-[10000] w-80 backdrop-blur-xl shadow-[0_0_30px_rgba(6,182,212,0.2)] pointer-events-auto"
+            style={{ WebkitAppRegion: 'no-drag' }}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+        >
             <div className="flex justify-between items-center mb-4 border-b border-cyan-900/50 pb-2">
                 <h2 className="text-cyan-400 font-bold text-sm uppercase tracking-wider">Settings</h2>
-                <button onClick={onClose} className="text-cyan-600 hover:text-cyan-400">
+                <button
+                    type="button"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={handleClose}
+                    className="text-cyan-600 hover:text-cyan-400"
+                    aria-label="Cerrar ajustes"
+                >
                     <X size={16} />
                 </button>
             </div>

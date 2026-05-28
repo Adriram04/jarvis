@@ -8,6 +8,7 @@ const CommandBar = ({
     onToggleListening,
     isListening,
     isConnected,
+    placeholder = 'Habla o escribe tu comando...',
 }) => {
     const handleSubmit = (event) => {
         event.preventDefault();
@@ -19,7 +20,7 @@ const CommandBar = ({
             <input
                 value={value}
                 onChange={(event) => onChange(event.target.value)}
-                placeholder="Habla o escribe tu comando..."
+                placeholder={placeholder}
                 aria-label="Comando para Jarvis"
             />
             <button type="submit" className="jarvis-icon-button" title="Enviar comando">

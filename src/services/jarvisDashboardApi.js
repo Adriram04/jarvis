@@ -65,7 +65,7 @@ export const runOpenClawAction = (action_type, payload = {}) => requestJson('/ap
     body: JSON.stringify({ action_type, payload }),
 });
 
-export const listCalendarEvents = (maxResults = 5) => runOpenClawAction('list_calendar_events', {
+export const listCalendarEvents = (maxResults = 20) => runOpenClawAction('list_calendar_events', {
     max_results: maxResults,
 });
 
@@ -93,6 +93,9 @@ export const extractCalendarItems = (response) => {
     const json = raw?.json;
 
     return firstArray(
+        response?.raw?.json?.raw?.items,
+        response?.raw?.json?.items,
+        response?.raw?.items,
         json?.raw?.items,
         json?.items,
         raw?.items,
@@ -121,6 +124,7 @@ export const normalizeCalendarEvent = (event, index = 0) => {
         startTime: validStart ? startDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : 'Todo el día',
         endTime: validEnd ? endDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
         location: event?.location || '',
+        description: event?.description || '',
         htmlLink: event?.htmlLink || event?.link || '',
         raw: event,
     };

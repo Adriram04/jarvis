@@ -24,6 +24,8 @@ import os
 import json
 import time
 import unicodedata
+import ctypes
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -414,9 +416,111 @@ async def startup_event():
     print("[SERVER] Startup: Initializing Kasa Agent...")
     await kasa_agent.initialize()
 
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+def _get_memory_status():
+    try:
+        if sys.platform == "win32":
+            status = _MemoryStatusEx()
+            status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                total = int(status.ullTotalPhys)
+                available = int(status.ullAvailPhys)
+                used = max(0, total - available)
+                percent = round((used / total) * 100, 1) if total else None
+                return {
+                    "percent": percent,
+                    "used_bytes": used,
+                    "available_bytes": available,
+                    "total_bytes": total,
+                }
+
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        total = int(pages * page_size)
+        available = None
+        try:
+            with open("/proc/meminfo", "r", encoding="utf-8") as meminfo:
+                for line in meminfo:
+                    if line.startswith("MemAvailable:"):
+                        available = int(line.split()[1]) * 1024
+                        break
+        except OSError:
+            available = None
+
+        used = max(0, total - available) if available is not None else None
+        percent = round((used / total) * 100, 1) if used is not None and total else None
+        return {
+            "percent": percent,
+            "used_bytes": used,
+            "available_bytes": available,
+            "total_bytes": total,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _get_cpu_percent():
+    try:
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["wmic", "cpu", "get", "LoadPercentage", "/value"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            values = []
+            for line in result.stdout.splitlines():
+                if line.startswith("LoadPercentage="):
+                    raw_value = line.split("=", 1)[1].strip()
+                    if raw_value:
+                        values.append(float(raw_value))
+            if values:
+                return round(sum(values) / len(values), 1)
+
+        load_avg = os.getloadavg()[0]
+        cpu_count = os.cpu_count() or 1
+        return round(min(100, max(0, (load_avg / cpu_count) * 100)), 1)
+    except Exception:
+        return None
+
+
+def _get_processor_label():
+    return (
+        platform.processor()
+        or os.environ.get("PROCESSOR_IDENTIFIER")
+        or platform.machine()
+        or "No disponible"
+    )
+
+
 @app.get("/status")
 async def status():
-    return {"status": "running", "service": "J.A.R.V.I.S Backend"}
+    return {
+        "status": "running",
+        "service": "J.A.R.V.I.S Backend",
+        "system": {
+            "cpu": {
+                "percent": _get_cpu_percent(),
+                "processor": _get_processor_label(),
+                "cores": os.cpu_count(),
+            },
+            "memory": _get_memory_status(),
+        },
+    }
 
 @app.post("/api/simulation/activate")
 async def api_simulation_activate():
