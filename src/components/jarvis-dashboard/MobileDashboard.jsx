@@ -12,6 +12,7 @@ const MobileDashboard = ({
     integrations = [],
 }) => {
     const nextEvent = agenda[0];
+    const connectedIntegrations = integrations.filter((item) => item.state === 'connected').length;
     const dateLabel = currentTime.toLocaleDateString('es-ES', {
         day: 'numeric',
         month: 'long',
@@ -48,17 +49,17 @@ const MobileDashboard = ({
                 <article className="jarvis-panel jarvis-mobile-card">
                     <div>
                         <span>Próximo evento</span>
-                        <strong>{nextEvent?.title || 'Sin eventos'}</strong>
+                        <strong>{nextEvent?.summary || 'Sin eventos'}</strong>
                     </div>
                     <div className="jarvis-mobile-card-meta">
-                        <strong>{nextEvent?.time || '--:--'}</strong>
+                        <strong>{nextEvent?.startTime || '--:--'}</strong>
                         <span>{nextEvent?.location || dateLabel}</span>
                     </div>
                 </article>
 
                 <article className="jarvis-panel jarvis-mobile-card">
                     <div>
-                        <span>Tareas pendientes</span>
+                        <span>Acciones pendientes</span>
                         <strong>{tasks.length}</strong>
                     </div>
                     <div className="jarvis-mobile-progress">
@@ -69,7 +70,7 @@ const MobileDashboard = ({
                 <article className="jarvis-panel jarvis-mobile-card integrations">
                     <div>
                         <span>Integraciones</span>
-                        <strong>{integrations.length} activas</strong>
+                        <strong>{connectedIntegrations ? `${connectedIntegrations} conectadas` : 'Sin conexiones confirmadas'}</strong>
                     </div>
                     <div className="jarvis-mobile-integration-dots">
                         {integrations.map((item) => <span key={item.name} title={item.name} />)}

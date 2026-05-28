@@ -1,12 +1,34 @@
 import React from 'react';
-import { CalendarPlus, FileText, Linkedin, Mail, PlusSquare } from 'lucide-react';
+import {
+    Box,
+    CalendarPlus,
+    Camera,
+    Cpu,
+    FileText,
+    Hand,
+    Linkedin,
+    Lightbulb,
+    PlusSquare,
+    Printer,
+    Settings,
+    ShieldCheck,
+    Webcam,
+} from 'lucide-react';
 
 const actions = [
     { id: 'new-task', label: 'Nueva tarea', icon: PlusSquare },
     { id: 'create-event', label: 'Crear evento', icon: CalendarPlus },
-    { id: 'write-email', label: 'Escribir email', icon: Mail },
-    { id: 'linkedin-post', label: 'Publicar en LinkedIn', icon: Linkedin },
-    { id: 'open-notes', label: 'Abrir notas', icon: FileText },
+    { id: 'linkedin-post', label: 'LinkedIn', icon: Linkedin },
+    { id: 'toggle-video', label: 'Cámara', icon: Camera },
+    { id: 'toggle-hand', label: 'Gestos', icon: Hand },
+    { id: 'toggle-cad', label: 'CAD', icon: Box },
+    { id: 'toggle-browser', label: 'Web Agent', icon: Webcam },
+    { id: 'toggle-kasa', label: 'Kasa', icon: Lightbulb },
+    { id: 'toggle-printer', label: 'Impresión 3D', icon: Printer },
+    { id: 'toggle-simulation', label: 'Simulación', icon: Cpu },
+    { id: 'toggle-openclaw', label: 'OpenClaw', icon: ShieldCheck },
+    { id: 'open-notes', label: 'Notas', icon: FileText },
+    { id: 'settings', label: 'Ajustes', icon: Settings },
 ];
 
 const QuickActions = ({ onAction }) => {

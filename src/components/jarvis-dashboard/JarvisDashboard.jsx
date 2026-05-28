@@ -1,6 +1,7 @@
 import React from 'react';
 import { Activity, Bell, Maximize2, Minus, Settings, SlidersHorizontal, X } from 'lucide-react';
 import AgendaPanel from './AgendaPanel';
+import CapabilitiesPanel from './CapabilitiesPanel';
 import CommandBar from './CommandBar';
 import IntegrationsPanel from './IntegrationsPanel';
 import JarvisCore from './JarvisCore';
@@ -17,9 +18,11 @@ const JarvisDashboard = ({
     status,
     socketConnected,
     isConnected,
+    isMuted,
     isListening,
     isVideoOn,
     isHandTrackingEnabled,
+    faceAuthEnabled,
     inputValue,
     setInputValue,
     onCommandSubmit,
@@ -31,6 +34,12 @@ const JarvisDashboard = ({
     onClose,
     dashboardData,
     audioLevel,
+    onRefreshCalendar,
+    onRefreshPending,
+    onRefreshActivity,
+    onRefreshIntegrations,
+    onConfirmPending,
+    onCancelPending,
 }) => {
     const timeLabel = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     const dateLabel = currentTime.toLocaleDateString('es-ES', {
@@ -40,12 +49,15 @@ const JarvisDashboard = ({
         year: 'numeric',
     });
 
-    const metrics = dashboardData?.metrics || [];
+    const systemItems = dashboardData?.systemItems || [];
     const connections = dashboardData?.connections || [];
     const agenda = dashboardData?.agenda || [];
-    const tasks = dashboardData?.tasks || [];
+    const pendingActions = dashboardData?.pendingActions || [];
     const integrations = dashboardData?.integrations || [];
     const recentActivity = dashboardData?.recentActivity || [];
+    const capabilities = dashboardData?.capabilities || [];
+    const loading = dashboardData?.loading || {};
+    const errors = dashboardData?.errors || {};
 
     return (
         <main className="jarvis-dashboard-root">
@@ -62,14 +74,16 @@ const JarvisDashboard = ({
                         </div>
                         <div className="jarvis-system-strip">
                             <span className={socketConnected ? 'is-online' : 'is-offline'}>{socketConnected ? 'Socket online' : 'Socket offline'}</span>
-                            <span>{status}</span>
-                            {isVideoOn && <span>Vision activa</span>}
-                            {isHandTrackingEnabled && <span>Gestos activos</span>}
+                            <span>{status || 'Sin estado de modelo'}</span>
+                            <span>{isConnected ? (isMuted ? 'Micrófono pausado' : 'Micrófono activo') : 'Modelo apagado'}</span>
+                            <span>{isVideoOn ? 'Cámara activa' : 'Cámara inactiva'}</span>
+                            <span>{isHandTrackingEnabled ? 'Gestos activos' : 'Gestos inactivos'}</span>
+                            <span>{faceAuthEnabled ? 'Face Auth activo' : 'Face Auth inactivo'}</span>
                         </div>
                     </header>
 
                     <div className="jarvis-core-stage">
-                        <StatusCard title="Estado del sistema" items={metrics} className="floating left" />
+                        <StatusCard title="Estado del sistema" items={systemItems} className="floating left" />
                         <JarvisCore isListening={isListening} audioLevel={audioLevel} />
                         <StatusCard title="Conexiones activas" items={connections} className="floating right" />
                     </div>
@@ -83,9 +97,16 @@ const JarvisDashboard = ({
                         isConnected={isConnected}
                     />
 
+                    <CapabilitiesPanel capabilities={capabilities} onAction={onQuickAction} />
+
                     <div className="jarvis-bottom-panels">
                         <QuickActions onAction={onQuickAction} />
-                        <RecentActivity items={recentActivity} />
+                        <RecentActivity
+                            items={recentActivity}
+                            onRefresh={onRefreshActivity}
+                            loading={loading.activity}
+                            error={errors.activity}
+                        />
                     </div>
                 </section>
 
@@ -108,10 +129,25 @@ const JarvisDashboard = ({
                     <AgendaPanel
                         events={agenda}
                         dateLabel={dateLabel}
-                        onViewCalendar={() => onQuickAction('view-calendar')}
+                        onViewCalendar={() => onQuickAction('create-event')}
+                        onRefresh={onRefreshCalendar}
+                        loading={loading.calendar}
+                        error={errors.calendar}
                     />
-                    <TasksPanel tasks={tasks} onAddTask={() => onQuickAction('new-task')} />
-                    <IntegrationsPanel integrations={integrations} onManage={() => onQuickAction('manage-integrations')} />
+                    <TasksPanel
+                        actions={pendingActions}
+                        onAddTask={() => onQuickAction('new-task')}
+                        onConfirm={onConfirmPending}
+                        onCancel={onCancelPending}
+                        loading={loading.pending}
+                        error={errors.pending}
+                    />
+                    <IntegrationsPanel
+                        integrations={integrations}
+                        onManage={() => onQuickAction('manage-integrations')}
+                        onRefresh={onRefreshIntegrations}
+                        loading={loading.integrations}
+                    />
                 </aside>
             </section>
 
@@ -121,7 +157,7 @@ const JarvisDashboard = ({
                 audioLevel={audioLevel}
                 onToggleListening={onToggleListening}
                 agenda={agenda}
-                tasks={tasks}
+                tasks={pendingActions}
                 integrations={integrations}
             />
         </main>

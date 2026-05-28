@@ -750,6 +750,9 @@ async def _execute_or_queue_openclaw_action(action_type, payload, human_summary=
             warnings=["invalid_request"],
         )
 
+    if isinstance(payload, dict) and payload.get("dry_run") is True:
+        return await _execute_openclaw_action(action_type, payload)
+
     classification = openclaw_permissions.classify(action_type)
     if classification == "forbidden":
         return _openclaw_local_result(

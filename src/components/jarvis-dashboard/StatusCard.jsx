@@ -5,6 +5,7 @@ const StatusCard = ({ title, items = [], className = '' }) => {
         <section className={`jarvis-panel jarvis-status-card ${className}`}>
             <div className="jarvis-panel-title">{title}</div>
             <div className="jarvis-status-list">
+                {items.length === 0 && <div className="jarvis-empty-state compact">Sin datos</div>}
                 {items.map((item) => (
                     <div className="jarvis-status-row" key={item.label}>
                         <span className={`jarvis-status-dot ${item.connected === false ? 'is-muted' : item.tone || ''}`} />

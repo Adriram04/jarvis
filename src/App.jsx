@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import io from 'socket.io-client';
 
 import CadWindow from './components/CadWindow';
@@ -12,7 +12,25 @@ import PrinterWindow from './components/PrinterWindow';
 import SettingsWindow from './components/SettingsWindow';
 import SimulationDashboard from './components/SimulationDashboard';
 import OpenClawDashboard from './components/OpenClawDashboard';
+import CalendarEventModal from './components/jarvis-dashboard/CalendarEventModal';
 import JarvisDashboard from './components/jarvis-dashboard/JarvisDashboard';
+import LinkedInPostModal from './components/jarvis-dashboard/LinkedInPostModal';
+import {
+    cancelPendingAction,
+    confirmPendingAction,
+    createCalendarEvent,
+    extractCalendarItems,
+    getBackendStatus,
+    getOpenClawEvents,
+    getOpenClawStatus,
+    getPendingActions,
+    listCalendarEvents,
+    normalizeCalendarEvent,
+    normalizeOpenClawEvents,
+    normalizePendingActions,
+    prepareLinkedInPost,
+    publishLinkedInPost,
+} from './services/jarvisDashboardApi';
 
 
 
@@ -67,6 +85,16 @@ function App() {
     const [activePrintStatus, setActivePrintStatus] = useState(null); // {printer, progress_percent, time_elapsed, state}
     const [printerCount, setPrinterCount] = useState(0); // Count of connected printers
     const [currentTime, setCurrentTime] = useState(new Date()); // Live clock
+    const [backendStatus, setBackendStatus] = useState(null);
+    const [openClawStatus, setOpenClawStatus] = useState(null);
+    const [calendarEvents, setCalendarEvents] = useState([]);
+    const [pendingActions, setPendingActions] = useState([]);
+    const [openClawEvents, setOpenClawEvents] = useState([]);
+    const [integrationStatuses, setIntegrationStatuses] = useState([]);
+    const [dashboardLoading, setDashboardLoading] = useState({});
+    const [dashboardError, setDashboardError] = useState({});
+    const [showCalendarEventModal, setShowCalendarEventModal] = useState(false);
+    const [showLinkedInPostModal, setShowLinkedInPostModal] = useState(false);
 
 
     // RESTORED STATE
@@ -195,6 +223,176 @@ function App() {
         }, 1000);
         return () => clearInterval(timer);
     }, []);
+
+    const setDashboardSectionLoading = useCallback((key, value) => {
+        setDashboardLoading(prev => ({ ...prev, [key]: value }));
+    }, []);
+
+    const setDashboardSectionError = useCallback((key, value) => {
+        setDashboardError(prev => ({ ...prev, [key]: value || null }));
+    }, []);
+
+    const responseError = (response, fallback) => response?.error || response?.data?.error || response?.data?.summary || fallback;
+
+    const refreshBackendStatus = useCallback(async () => {
+        setDashboardSectionLoading('backend', true);
+        const response = await getBackendStatus();
+        setBackendStatus(response);
+        setDashboardSectionError('backend', response.ok ? null : response.error);
+        setDashboardSectionLoading('backend', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
+    const refreshOpenClawStatus = useCallback(async () => {
+        setDashboardSectionLoading('openclaw', true);
+        const response = await getOpenClawStatus();
+        setOpenClawStatus(response);
+        setDashboardSectionError('openclaw', response.success ? null : responseError(response, 'OpenClaw no disponible'));
+        setDashboardSectionLoading('openclaw', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
+    const refreshCalendarEvents = useCallback(async () => {
+        setDashboardSectionLoading('calendar', true);
+        const response = await listCalendarEvents(5);
+        if (response.success) {
+            const events = extractCalendarItems(response)
+                .map(normalizeCalendarEvent)
+                .sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')));
+            setCalendarEvents(events);
+            setDashboardSectionError('calendar', null);
+        } else {
+            setCalendarEvents([]);
+            setDashboardSectionError('calendar', responseError(response, 'Google Calendar no disponible'));
+        }
+        setDashboardSectionLoading('calendar', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
+    const refreshPendingActions = useCallback(async () => {
+        setDashboardSectionLoading('pending', true);
+        const response = await getPendingActions();
+        if (response.ok) {
+            setPendingActions(normalizePendingActions(response));
+            setDashboardSectionError('pending', null);
+        } else {
+            setPendingActions([]);
+            setDashboardSectionError('pending', response.error);
+        }
+        setDashboardSectionLoading('pending', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
+    const refreshOpenClawEvents = useCallback(async () => {
+        setDashboardSectionLoading('activity', true);
+        const response = await getOpenClawEvents(10);
+        if (response.ok && response.success) {
+            setOpenClawEvents(normalizeOpenClawEvents(response));
+            setDashboardSectionError('activity', null);
+        } else {
+            setOpenClawEvents([]);
+            setDashboardSectionError('activity', responseError(response, 'Actividad no disponible'));
+        }
+        setDashboardSectionLoading('activity', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
+    const refreshIntegrationStatuses = useCallback(async () => {
+        setDashboardSectionLoading('integrations', true);
+        const [backendRes, openClawRes, calendarRes, linkedinRes] = await Promise.all([
+            getBackendStatus(),
+            getOpenClawStatus(),
+            listCalendarEvents(1),
+            prepareLinkedInPost('Comprobación de estado de Jarvis. No publicar.'),
+        ]);
+
+        setBackendStatus(backendRes);
+        setOpenClawStatus(openClawRes);
+
+        const linkedinConfigured = Boolean(
+            linkedinRes?.data?.data?.raw?.configured ||
+            linkedinRes?.data?.data?.raw?.json?.configured ||
+            linkedinRes?.data?.data?.raw?.json?.raw?.configured ||
+            linkedinRes?.data?.raw?.configured ||
+            linkedinRes?.data?.raw?.json?.configured ||
+            linkedinRes?.data?.raw?.json?.raw?.configured ||
+            linkedinRes?.data?.raw?.raw?.configured
+        );
+
+        setIntegrationStatuses([
+            {
+                name: 'Backend',
+                shortName: 'API',
+                state: backendRes.ok ? 'connected' : 'error',
+                meta: backendRes.ok ? 'Online' : backendRes.error || 'No disponible',
+                tone: backendRes.ok ? 'green' : '',
+            },
+            {
+                name: 'OpenClaw',
+                shortName: 'OC',
+                state: openClawRes.success ? 'connected' : 'error',
+                meta: openClawRes.success ? (openClawRes.data?.data?.summary || openClawRes.data?.summary || 'Online') : responseError(openClawRes, 'No disponible'),
+                tone: openClawRes.success ? 'cyan' : '',
+            },
+            {
+                name: 'Google Calendar',
+                shortName: '31',
+                state: calendarRes.success ? 'connected' : 'error',
+                meta: calendarRes.success ? 'Disponible' : responseError(calendarRes, 'No configurado'),
+                tone: calendarRes.success ? 'green' : '',
+            },
+            {
+                name: 'LinkedIn',
+                shortName: 'in',
+                state: linkedinRes.success && linkedinConfigured ? 'connected' : (linkedinRes.success ? 'unknown' : 'error'),
+                meta: linkedinRes.success
+                    ? (linkedinConfigured ? 'Dry-run configurado' : 'Dry-run disponible, configuración no confirmada')
+                    : responseError(linkedinRes, 'No configurado'),
+                tone: linkedinRes.success && linkedinConfigured ? 'cyan' : '',
+            },
+            {
+                name: 'WhatsApp',
+                shortName: 'WA',
+                state: openClawRes.success ? 'connected' : 'error',
+                meta: openClawRes.success ? 'Vía OpenClaw' : responseError(openClawRes, 'No disponible'),
+                tone: openClawRes.success ? 'green' : '',
+            },
+        ]);
+        setDashboardSectionLoading('integrations', false);
+    }, [setDashboardSectionLoading]);
+
+    useEffect(() => {
+        refreshBackendStatus();
+        refreshOpenClawStatus();
+        refreshCalendarEvents();
+        refreshPendingActions();
+        refreshOpenClawEvents();
+        refreshIntegrationStatuses();
+
+        const backendTimer = setInterval(() => {
+            refreshBackendStatus();
+            refreshOpenClawStatus();
+        }, 30000);
+        const calendarTimer = setInterval(refreshCalendarEvents, 60000);
+        const pendingTimer = setInterval(refreshPendingActions, 12000);
+        const activityTimer = setInterval(refreshOpenClawEvents, 12000);
+        const integrationsTimer = setInterval(refreshIntegrationStatuses, 60000);
+
+        return () => {
+            clearInterval(backendTimer);
+            clearInterval(calendarTimer);
+            clearInterval(pendingTimer);
+            clearInterval(activityTimer);
+            clearInterval(integrationsTimer);
+        };
+    }, [
+        refreshBackendStatus,
+        refreshCalendarEvents,
+        refreshIntegrationStatuses,
+        refreshOpenClawEvents,
+        refreshOpenClawStatus,
+        refreshPendingActions,
+    ]);
 
     // Centering Logic (Startup & Resize)
     useEffect(() => {
@@ -1503,30 +1701,77 @@ function App() {
         toggleMute();
     };
 
-    const handleDashboardQuickAction = (actionId) => {
+    const handleDashboardQuickAction = async (actionId) => {
         switch (actionId) {
             case 'create-event':
-                submitCommand('Crea un evento en mi calendario');
+                setShowCalendarEventModal(true);
                 break;
             case 'view-calendar':
-                submitCommand('Muestrame mi agenda de hoy en Google Calendar');
+                refreshCalendarEvents();
                 break;
             case 'linkedin-post':
-                submitCommand('Prepara una publicación en LinkedIn');
+                setShowLinkedInPostModal(true);
                 break;
             case 'manage-integrations':
                 setShowOpenClawDashboard(true);
                 bringToFront('openclaw');
                 break;
-            case 'write-email':
-                // TODO: connect to a direct email draft endpoint when the OpenClaw email flow is exposed in the UI.
-                setInputValue('Escribe un email para ');
-                addMessage('System', 'Borrador de email preparado. Completa el comando y envíalo a Jarvis.');
+            case 'settings':
+                setShowSettings(true);
                 break;
             case 'new-task':
                 // TODO: connect to a real task manager endpoint when it exists.
-                setInputValue('Crea una tarea: ');
-                addMessage('System', 'Nueva tarea preparada. Completa el comando y envíalo a Jarvis.');
+                setInputValue('Crea una tarea para ... mañana a las ...');
+                addMessage('System', 'Plantilla de tarea preparada. Completa el comando y envíalo a Jarvis.');
+                break;
+            case 'toggle-video':
+                toggleVideo();
+                break;
+            case 'toggle-hand':
+                if (isHandTrackingEnabled) {
+                    setIsHandTrackingEnabled(false);
+                    break;
+                }
+                if (!isVideoOn) {
+                    await startVideo();
+                }
+                setIsHandTrackingEnabled(true);
+                break;
+            case 'toggle-cad': {
+                const next = !showCadWindow;
+                setShowCadWindow(next);
+                if (next) bringToFront('cad');
+                break;
+            }
+            case 'cad-command':
+                setInputValue('Genera un modelo 3D de ');
+                break;
+            case 'toggle-browser': {
+                const next = !showBrowserWindow;
+                setShowBrowserWindow(next);
+                if (next) bringToFront('browser');
+                break;
+            }
+            case 'browser-command':
+                setInputValue('Abre el agente web y busca ');
+                break;
+            case 'toggle-kasa':
+                toggleKasaWindow();
+                break;
+            case 'toggle-printer':
+                togglePrinterWindow();
+                break;
+            case 'toggle-simulation':
+                toggleSimulationDashboard();
+                break;
+            case 'toggle-openclaw':
+                toggleOpenClawDashboard();
+                break;
+            case 'toggle-power':
+                togglePower();
+                break;
+            case 'toggle-mic':
+                toggleMute();
                 break;
             case 'open-notes':
                 // TODO: connect to project notes once the notes surface exists.
@@ -1538,45 +1783,185 @@ function App() {
         }
     };
 
-    const dynamicCpu = Math.min(96, Math.max(18, Math.round(23 + audioAmp * 42)));
-    const dynamicRam = Math.min(92, Math.max(35, Math.round(45 + audioAmp * 28)));
-    const recentDashboardActivity = messages.slice(-3).reverse().map((message) => ({
-        title: `${message.sender}: ${String(message.text).slice(0, 54)}`,
-        meta: 'Conversación con Jarvis',
-        time: message.time
-    }));
+    const handleConfirmDashboardPending = async (id) => {
+        const response = await confirmPendingAction(id);
+        if (!response.ok && !response.success) {
+            addMessage('System', response.error || 'No se pudo confirmar la acción pendiente.');
+        }
+        await Promise.all([refreshPendingActions(), refreshOpenClawEvents(), refreshCalendarEvents()]);
+    };
+
+    const handleCancelDashboardPending = async (id) => {
+        const response = await cancelPendingAction(id);
+        if (!response.ok && !response.success) {
+            addMessage('System', response.error || 'No se pudo cancelar la acción pendiente.');
+        }
+        await Promise.all([refreshPendingActions(), refreshOpenClawEvents()]);
+    };
+
+    const handleCreateCalendarEvent = async (payload) => {
+        const response = await createCalendarEvent(payload);
+        await Promise.all([refreshPendingActions(), refreshOpenClawEvents(), refreshCalendarEvents()]);
+        return response;
+    };
+
+    const handleDryRunCalendarEvent = async (payload) => {
+        const response = await createCalendarEvent({ ...payload, dry_run: true });
+        await refreshOpenClawEvents();
+        return response;
+    };
+
+    const handlePrepareLinkedInPost = async (content) => {
+        const response = await prepareLinkedInPost(content);
+        await refreshOpenClawEvents();
+        return response;
+    };
+
+    const handlePublishLinkedInPost = async (content) => {
+        const response = await publishLinkedInPost(content);
+        await Promise.all([refreshPendingActions(), refreshOpenClawEvents()]);
+        return response;
+    };
+
+    const statusValue = (enabled, yes, no) => enabled ? yes : no;
+    const openClawOnline = Boolean(openClawStatus?.success);
+    const backendOnline = Boolean(backendStatus?.ok);
+    const connectedIntegrations = integrationStatuses.filter(item => item.state === 'connected');
 
     const dashboardData = {
-        metrics: [
-            { label: 'CPU', value: dynamicCpu, unit: '%', percent: dynamicCpu },
-            { label: 'RAM', value: dynamicRam, unit: '%', percent: dynamicRam },
-            { label: 'Red', value: socketConnected ? '120 Mbps' : 'Offline', connected: socketConnected, detail: socketConnected ? 'Socket activo' : 'Sin conexión' },
+        systemItems: [
+            { label: 'Backend', value: backendStatus ? statusValue(backendOnline, 'Online', 'Offline') : 'Sin datos', connected: backendOnline, detail: dashboardError.backend || 'GET /status' },
+            { label: 'Socket', value: statusValue(socketConnected, 'Online', 'Offline'), connected: socketConnected, detail: 'Socket.IO' },
+            { label: 'Modelo', value: status || 'Sin datos', connected: isConnected, detail: isConnected ? 'Audio inicializado' : 'Modelo parado' },
+            { label: 'Audio', value: isConnected ? statusValue(!isMuted, 'Activo', 'Pausado') : 'No disponible', connected: isConnected && !isMuted },
+            { label: 'Cámara', value: statusValue(isVideoOn, 'Activa', 'Inactiva'), connected: isVideoOn, detail: isVideoOn && fps ? `${fps} FPS` : undefined },
+            { label: 'Gestos', value: statusValue(isHandTrackingEnabled, 'Activos', 'Inactivos'), connected: isHandTrackingEnabled },
+            { label: 'Face Auth', value: statusValue(faceAuthEnabled, 'Activo', 'Inactivo'), connected: faceAuthEnabled },
+            { label: 'Proyecto', value: currentProject || 'No disponible', connected: Boolean(currentProject) },
+            { label: 'Impresoras', value: printerCount ? String(printerCount) : '0', connected: printerCount > 0, detail: printerCount ? 'Detectadas' : 'Sin impresoras detectadas' },
+            { label: 'Kasa', value: String(kasaDevices.length), connected: kasaDevices.length > 0, detail: kasaDevices.length ? 'Dispositivos detectados' : 'Sin dispositivos' },
         ],
-        connections: [
-            { label: 'Google Calendar', value: 'Conectado', detail: 'OpenClaw productivity', tone: 'green' },
-            { label: 'LinkedIn', value: 'Conectado', detail: 'Publicaciones listas', tone: 'green' },
-            { label: 'WhatsApp', value: 'Conectado', detail: 'Gateway OpenClaw', tone: 'green' },
+        connections: connectedIntegrations.length > 0
+            ? connectedIntegrations.map(item => ({ label: item.name, value: item.meta, connected: true, tone: item.tone || 'green' }))
+            : [
+                { label: 'OpenClaw', value: openClawStatus ? statusValue(openClawOnline, 'Online', 'Error') : 'Sin datos', connected: openClawOnline },
+                { label: 'Calendar', value: 'No configurado', connected: false },
+                { label: 'LinkedIn', value: 'No configurado', connected: false },
+            ],
+        agenda: calendarEvents,
+        pendingActions,
+        integrations: integrationStatuses,
+        recentActivity: openClawEvents,
+        capabilities: [
+            {
+                id: 'voice',
+                icon: 'voice',
+                title: 'Voz / Modelo',
+                state: isConnected ? (isMuted ? 'Pausado' : 'Escuchando') : 'Apagado',
+                stateTone: isConnected && !isMuted ? 'green' : '',
+                description: 'Control del modelo y entrada de micrófono.',
+                primaryAction: 'toggle-power',
+                primaryLabel: isConnected ? 'Apagar' : 'Encender',
+                secondaryAction: 'toggle-mic',
+                secondaryLabel: isMuted ? 'Reanudar mic' : 'Pausar mic',
+            },
+            {
+                id: 'camera',
+                icon: 'camera',
+                title: 'Cámara',
+                state: isVideoOn ? `Activa${fps ? ` · ${fps} FPS` : ''}` : 'Inactiva',
+                stateTone: isVideoOn ? 'green' : '',
+                description: 'Visión para contexto visual y captura de frames.',
+                primaryAction: 'toggle-video',
+                primaryLabel: isVideoOn ? 'Desactivar' : 'Activar',
+            },
+            {
+                id: 'gestures',
+                icon: 'gestures',
+                title: 'Gestos',
+                state: isHandTrackingEnabled ? 'Activos' : 'Inactivos',
+                stateTone: isHandTrackingEnabled ? 'green' : '',
+                description: 'Cursor por mano, pinch click, fist drag.',
+                primaryAction: 'toggle-hand',
+                primaryLabel: isHandTrackingEnabled ? 'Desactivar' : 'Activar',
+            },
+            {
+                id: 'auth',
+                icon: 'auth',
+                title: 'Face Auth',
+                state: faceAuthEnabled ? 'Activo' : 'Inactivo',
+                stateTone: faceAuthEnabled ? 'green' : '',
+                description: 'Autenticación facial configurable desde ajustes.',
+                primaryAction: 'settings',
+                primaryLabel: 'Ajustes',
+            },
+            {
+                id: 'cad',
+                icon: 'cad',
+                title: 'CAD',
+                state: showCadWindow ? 'Abierto' : 'Cerrado',
+                stateTone: showCadWindow ? 'green' : '',
+                description: 'Generación, iteración y vista 3D de modelos.',
+                primaryAction: 'toggle-cad',
+                primaryLabel: showCadWindow ? 'Cerrar' : 'Abrir',
+                secondaryAction: 'cad-command',
+                secondaryLabel: 'Preparar prompt',
+            },
+            {
+                id: 'browser',
+                icon: 'browser',
+                title: 'Web Agent',
+                state: showBrowserWindow ? 'Abierto' : 'Cerrado',
+                stateTone: showBrowserWindow ? 'green' : '',
+                description: 'Automatización web visual controlada por Jarvis.',
+                primaryAction: 'toggle-browser',
+                primaryLabel: showBrowserWindow ? 'Cerrar' : 'Abrir',
+                secondaryAction: 'browser-command',
+                secondaryLabel: 'Preparar búsqueda',
+            },
+            {
+                id: 'kasa',
+                icon: 'kasa',
+                title: 'Kasa',
+                state: kasaDevices.length ? `${kasaDevices.length} detectado(s)` : 'Sin dispositivos',
+                stateTone: kasaDevices.length ? 'green' : '',
+                description: 'Control de dispositivos inteligentes Kasa.',
+                primaryAction: 'toggle-kasa',
+                primaryLabel: showKasaWindow ? 'Cerrar' : 'Abrir',
+            },
+            {
+                id: 'printer',
+                icon: 'printer',
+                title: 'Impresión 3D',
+                state: activePrintStatus?.state || (slicingStatus.active ? `${slicingStatus.percent}% slicing` : (printerCount ? `${printerCount} impresora(s)` : 'Sin impresoras detectadas')),
+                stateTone: printerCount || activePrintStatus || slicingStatus.active ? 'green' : '',
+                description: activePrintStatus?.printer || slicingStatus.message || 'Slicing, estado y control de impresión.',
+                primaryAction: 'toggle-printer',
+                primaryLabel: showPrinterWindow ? 'Cerrar' : 'Abrir',
+            },
+            {
+                id: 'simulation',
+                icon: 'simulation',
+                title: 'Simulación',
+                state: simulationState.simulation_mode ? 'Activa' : 'Inactiva',
+                stateTone: simulationState.simulation_mode ? 'green' : '',
+                description: 'Panel de simulación para Kasa e impresión.',
+                primaryAction: 'toggle-simulation',
+                primaryLabel: showSimulationDashboard ? 'Cerrar' : 'Abrir',
+            },
+            {
+                id: 'openclaw',
+                icon: 'openclaw',
+                title: 'OpenClaw',
+                state: openClawOnline ? 'Online' : (openClawStatus ? 'Error' : 'Sin datos'),
+                stateTone: openClawOnline ? 'green' : '',
+                description: 'WhatsApp, automatizaciones, Calendar, LinkedIn y acciones externas.',
+                primaryAction: 'toggle-openclaw',
+                primaryLabel: showOpenClawDashboard ? 'Cerrar' : 'Abrir',
+            },
         ],
-        agenda: [
-            { time: '18:00', end: '18:30', title: 'Reunión de proyecto', location: 'Microsoft Teams', tone: 'cyan' },
-            { time: '20:30', end: '21:00', title: 'Entrenamiento', location: 'Gimnasio', tone: 'green' },
-            { time: '22:00', end: '22:30', title: 'Repasar documentación', location: 'Personal', tone: 'purple' },
-        ],
-        tasks: [
-            { title: 'Terminar informe TFG', detail: 'Alta prioridad', priority: 'high' },
-            { title: 'Enviar propuesta a Deuser', detail: 'Media prioridad', priority: 'medium' },
-            { title: 'Estudiar estructura API', detail: 'Baja prioridad', priority: 'low' },
-        ],
-        integrations: [
-            { name: 'Google Calendar', shortName: '31', meta: 'Sincronizado', tone: 'green' },
-            { name: 'LinkedIn', shortName: 'in', meta: 'Conectado', tone: 'cyan' },
-            { name: 'WhatsApp', shortName: 'WA', meta: 'OpenClaw activo', tone: 'green' },
-        ],
-        recentActivity: recentDashboardActivity.length > 0 ? recentDashboardActivity : [
-            { title: 'Publicación en LinkedIn completada', meta: 'Completado', time: '18:40' },
-            { title: 'Evento creado', meta: 'Completado', time: '18:35' },
-            { title: 'Email enviado', meta: 'Completado', time: '17:12' },
-        ],
+        loading: dashboardLoading,
+        errors: dashboardError,
     };
 
 
@@ -1588,9 +1973,11 @@ function App() {
                 status={status}
                 socketConnected={socketConnected}
                 isConnected={isConnected}
+                isMuted={isMuted}
                 isListening={isDashboardListening}
                 isVideoOn={isVideoOn}
                 isHandTrackingEnabled={isHandTrackingEnabled}
+                faceAuthEnabled={faceAuthEnabled}
                 inputValue={inputValue}
                 setInputValue={setInputValue}
                 onCommandSubmit={submitCommand}
@@ -1602,6 +1989,26 @@ function App() {
                 onClose={handleCloseRequest}
                 dashboardData={dashboardData}
                 audioLevel={audioAmp}
+                onRefreshCalendar={refreshCalendarEvents}
+                onRefreshPending={refreshPendingActions}
+                onRefreshActivity={refreshOpenClawEvents}
+                onRefreshIntegrations={refreshIntegrationStatuses}
+                onConfirmPending={handleConfirmDashboardPending}
+                onCancelPending={handleCancelDashboardPending}
+            />
+
+            <CalendarEventModal
+                open={showCalendarEventModal}
+                onClose={() => setShowCalendarEventModal(false)}
+                onCreate={handleCreateCalendarEvent}
+                onDryRun={handleDryRunCalendarEvent}
+            />
+
+            <LinkedInPostModal
+                open={showLinkedInPostModal}
+                onClose={() => setShowLinkedInPostModal(false)}
+                onPrepare={handlePrepareLinkedInPost}
+                onPublish={handlePublishLinkedInPost}
             />
 
             {isLockScreenVisible && (

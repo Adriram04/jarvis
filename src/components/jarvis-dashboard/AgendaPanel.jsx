@@ -1,27 +1,46 @@
 import React from 'react';
-import { CalendarDays } from 'lucide-react';
+import { CalendarDays, ExternalLink, RefreshCw } from 'lucide-react';
 
-const AgendaPanel = ({ events = [], dateLabel, onViewCalendar }) => {
+const AgendaPanel = ({ events = [], dateLabel, onViewCalendar, onRefresh, loading, error }) => {
     return (
         <section className="jarvis-panel jarvis-list-panel">
             <div className="jarvis-panel-header">
                 <h2>Agenda de hoy</h2>
-                <button type="button" onClick={onViewCalendar}>Ver calendario</button>
+                <div className="jarvis-panel-header-actions">
+                    <button type="button" onClick={onRefresh} title="Actualizar agenda">
+                        <RefreshCw size={14} /> Actualizar
+                    </button>
+                    <button type="button" onClick={onViewCalendar}>Crear evento</button>
+                </div>
             </div>
             <p className="jarvis-panel-date">{dateLabel}</p>
+            {error && <div className="jarvis-soft-error">{error}</div>}
+            {loading && <div className="jarvis-empty-state compact">Cargando agenda...</div>}
             <div className="jarvis-event-list">
+                {!loading && events.length === 0 && <div className="jarvis-empty-state">Sin eventos próximos</div>}
                 {events.map((event) => (
-                    <article className="jarvis-event-item" key={`${event.time}-${event.title}`}>
+                    <article className="jarvis-event-item" key={event.id}>
                         <div className={`jarvis-event-accent ${event.tone || 'cyan'}`} />
                         <div className="jarvis-event-time">
-                            <strong>{event.time}</strong>
-                            <span>{event.end}</span>
+                            <strong>{event.startTime}</strong>
+                            <span>{event.endTime}</span>
                         </div>
                         <div className="jarvis-event-copy">
-                            <strong>{event.title}</strong>
-                            <span>{event.location}</span>
+                            <strong>{event.summary}</strong>
+                            <span>{event.location || 'Sin ubicación'}</span>
                         </div>
-                        <CalendarDays size={16} />
+                        {event.htmlLink ? (
+                            <button
+                                type="button"
+                                className="jarvis-inline-icon"
+                                onClick={() => window.open(event.htmlLink, '_blank')}
+                                title="Abrir evento"
+                            >
+                                <ExternalLink size={15} />
+                            </button>
+                        ) : (
+                            <CalendarDays size={16} />
+                        )}
                     </article>
                 ))}
             </div>

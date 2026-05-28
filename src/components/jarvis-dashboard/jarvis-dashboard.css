@@ -231,7 +231,13 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    overflow-y: auto;
     padding: 26px 0 0;
+    scrollbar-width: none;
+}
+
+.jarvis-center-column::-webkit-scrollbar {
+    display: none;
 }
 
 .jarvis-hero-copy {
@@ -300,7 +306,7 @@
     display: grid;
     place-items: center;
     flex: 1 1 auto;
-    min-height: 410px;
+    min-height: 350px;
 }
 
 .jarvis-core {
@@ -552,6 +558,7 @@
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     min-height: 178px;
+    padding-bottom: 2px;
 }
 
 .jarvis-quick-actions,
@@ -724,6 +731,18 @@
     gap: 12px;
 }
 
+.jarvis-panel-header.compact {
+    margin-bottom: 10px;
+}
+
+.jarvis-panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .jarvis-panel-header h2 {
     margin: 0;
     color: var(--jarvis-text);
@@ -733,10 +752,44 @@
 
 .jarvis-panel-header button,
 .jarvis-panel-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     color: var(--jarvis-cyan);
     border: 0;
     background: transparent;
     font-size: 12px;
+}
+
+.jarvis-empty-state,
+.jarvis-soft-error,
+.jarvis-soft-success {
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.42);
+    color: var(--jarvis-muted);
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 12px;
+}
+
+.jarvis-empty-state.compact {
+    padding: 8px;
+    margin-top: 10px;
+}
+
+.jarvis-soft-error {
+    margin: 10px 0;
+    color: #FCA5A5;
+    border-color: rgba(248, 113, 113, 0.24);
+    background: rgba(248, 113, 113, 0.08);
+}
+
+.jarvis-soft-success {
+    margin: 10px 0;
+    color: #9FFFD6;
+    border-color: rgba(0, 255, 147, 0.24);
+    background: rgba(0, 255, 147, 0.08);
 }
 
 .jarvis-panel-date {
@@ -766,7 +819,7 @@
 }
 
 .jarvis-event-item {
-    grid-template-columns: 4px 56px minmax(0, 1fr) 18px;
+    grid-template-columns: 4px 56px minmax(0, 1fr) 28px;
     gap: 10px;
     overflow: hidden;
 }
@@ -834,10 +887,75 @@
     color: rgba(123, 97, 255, 0.9);
 }
 
+.jarvis-inline-icon {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    color: var(--jarvis-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 6px;
+    background: rgba(0, 163, 255, 0.08);
+}
+
 .jarvis-task-item {
     grid-template-columns: 16px minmax(0, 1fr);
     gap: 10px;
     padding: 8px 12px;
+}
+
+.jarvis-pending-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.jarvis-pending-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 64px;
+    padding: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.11);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.42);
+}
+
+.jarvis-pending-item strong,
+.jarvis-pending-item span,
+.jarvis-pending-item time {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.jarvis-pending-item strong {
+    color: var(--jarvis-text);
+    font-size: 12px;
+}
+
+.jarvis-pending-item span,
+.jarvis-pending-item time {
+    margin-top: 3px;
+    color: var(--jarvis-muted);
+    font-size: 11px;
+}
+
+.jarvis-pending-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.jarvis-pending-actions button {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: var(--jarvis-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-radius: 6px;
+    background: rgba(0, 163, 255, 0.08);
 }
 
 .jarvis-task-priority {
@@ -898,6 +1016,203 @@
 
 .jarvis-integration-item svg {
     color: var(--jarvis-green);
+}
+
+.jarvis-integration-item svg.is-error {
+    color: #FCA5A5;
+}
+
+.jarvis-integration-item svg.is-muted {
+    color: var(--jarvis-muted);
+}
+
+.jarvis-capabilities {
+    flex: 0 0 auto;
+    margin: 0 0 12px;
+    padding: 14px;
+}
+
+.jarvis-capability-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(128px, 1fr));
+    gap: 10px;
+}
+
+.jarvis-capability-card {
+    min-width: 0;
+    min-height: 142px;
+    padding: 11px;
+    border: 1px solid rgba(0, 229, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.42);
+}
+
+.jarvis-capability-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.jarvis-capability-icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    color: var(--jarvis-cyan);
+    border-radius: 8px;
+    background: rgba(0, 163, 255, 0.12);
+}
+
+.jarvis-capability-state {
+    min-width: 0;
+    color: var(--jarvis-muted);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.jarvis-capability-state.green {
+    color: var(--jarvis-green);
+}
+
+.jarvis-capability-card strong {
+    display: block;
+    margin-top: 9px;
+    color: var(--jarvis-text);
+    font-size: 13px;
+}
+
+.jarvis-capability-card p {
+    display: -webkit-box;
+    min-height: 32px;
+    margin: 5px 0 9px;
+    overflow: hidden;
+    color: var(--jarvis-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.jarvis-capability-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.jarvis-capability-actions button {
+    min-height: 26px;
+    padding: 0 8px;
+    color: var(--jarvis-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-radius: 6px;
+    background: rgba(0, 163, 255, 0.08);
+    font-size: 11px;
+}
+
+.jarvis-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 5000;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: rgba(3, 5, 10, 0.68);
+    backdrop-filter: blur(10px);
+}
+
+.jarvis-modal {
+    width: min(560px, 100%);
+    max-height: min(720px, 92vh);
+    overflow-y: auto;
+    color: var(--jarvis-text);
+    border: 1px solid rgba(0, 229, 255, 0.26);
+    border-radius: 8px;
+    background: linear-gradient(145deg, rgba(10, 15, 28, 0.96), rgba(5, 7, 13, 0.94));
+    box-shadow: 0 0 42px rgba(0, 163, 255, 0.24);
+}
+
+.jarvis-modal header,
+.jarvis-modal footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.12);
+}
+
+.jarvis-modal footer {
+    justify-content: flex-end;
+    border-top: 1px solid rgba(0, 229, 255, 0.12);
+    border-bottom: 0;
+}
+
+.jarvis-modal h2 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.jarvis-modal p {
+    margin: 4px 0 0;
+    color: var(--jarvis-muted);
+    font-size: 12px;
+}
+
+.jarvis-modal header button,
+.jarvis-modal footer button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0 12px;
+    color: var(--jarvis-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.22);
+    border-radius: 8px;
+    background: rgba(0, 163, 255, 0.08);
+}
+
+.jarvis-modal header button {
+    width: 34px;
+    padding: 0;
+}
+
+.jarvis-modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 16px;
+}
+
+.jarvis-modal label,
+.jarvis-modal-field {
+    display: grid;
+    gap: 7px;
+    color: var(--jarvis-muted);
+    font-size: 12px;
+}
+
+.jarvis-modal label.full,
+.jarvis-modal-field {
+    grid-column: 1 / -1;
+    padding: 16px;
+}
+
+.jarvis-modal input,
+.jarvis-modal textarea {
+    width: 100%;
+    min-width: 0;
+    color: var(--jarvis-text);
+    border: 1px solid rgba(0, 229, 255, 0.16);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.62);
+    outline: none;
+    padding: 10px;
+}
+
+.jarvis-modal textarea {
+    min-height: 132px;
+    resize: vertical;
 }
 
 .jarvis-mobile-dashboard {
