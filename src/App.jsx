@@ -24,6 +24,8 @@ import {
     getOpenClawEvents,
     getOpenClawStatus,
     getPendingActions,
+    getProjects,
+    getProjectTree,
     listCalendarEvents,
     normalizeCalendarEvent,
     normalizeOpenClawEvents,
@@ -96,6 +98,10 @@ function App() {
     const [showCalendarEventModal, setShowCalendarEventModal] = useState(false);
     const [showLinkedInPostModal, setShowLinkedInPostModal] = useState(false);
     const [activeModule, setActiveModule] = useState('home');
+    const [projects, setProjects] = useState([]);
+    const [projectTree, setProjectTree] = useState(null);
+    const [projectTreeLoading, setProjectTreeLoading] = useState(false);
+    const [projectTreeError, setProjectTreeError] = useState(null);
 
 
     // RESTORED STATE
@@ -298,6 +304,45 @@ function App() {
         return response;
     }, [setDashboardSectionError, setDashboardSectionLoading]);
 
+    const refreshProjects = useCallback(async () => {
+        setDashboardSectionLoading('projects', true);
+        const response = await getProjects();
+        if (response.ok && response.success) {
+            const body = response.data || {};
+            setProjects(Array.isArray(body.projects) ? body.projects : []);
+            if (body.current_project) {
+                setCurrentProject(body.current_project);
+            }
+            setDashboardSectionError('projects', null);
+        } else {
+            setProjects([]);
+            setDashboardSectionError('projects', responseError(response, 'Proyectos no disponibles'));
+        }
+        setDashboardSectionLoading('projects', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
+    const loadProjectTree = useCallback(async (projectName) => {
+        const name = String(projectName || '').trim();
+        if (!name) {
+            setProjectTree(null);
+            setProjectTreeError(null);
+            return null;
+        }
+
+        setProjectTreeLoading(true);
+        setProjectTreeError(null);
+        const response = await getProjectTree(name);
+        if (response.ok && response.success) {
+            setProjectTree(response.data || null);
+        } else {
+            setProjectTree(null);
+            setProjectTreeError(responseError(response, 'No se pudo leer el proyecto'));
+        }
+        setProjectTreeLoading(false);
+        return response;
+    }, []);
+
     const refreshIntegrationStatuses = useCallback(async () => {
         setDashboardSectionLoading('integrations', true);
         const [backendRes, openClawRes, calendarRes, linkedinRes] = await Promise.all([
@@ -366,6 +411,7 @@ function App() {
         refreshPendingActions();
         refreshOpenClawEvents();
         refreshIntegrationStatuses();
+        refreshProjects();
 
         const backendTimer = setInterval(() => {
             refreshBackendStatus();
@@ -375,6 +421,7 @@ function App() {
         const pendingTimer = setInterval(refreshPendingActions, 12000);
         const activityTimer = setInterval(refreshOpenClawEvents, 12000);
         const integrationsTimer = setInterval(refreshIntegrationStatuses, 60000);
+        const projectsTimer = setInterval(refreshProjects, 30000);
 
         return () => {
             clearInterval(backendTimer);
@@ -382,6 +429,7 @@ function App() {
             clearInterval(pendingTimer);
             clearInterval(activityTimer);
             clearInterval(integrationsTimer);
+            clearInterval(projectsTimer);
         };
     }, [
         refreshBackendStatus,
@@ -390,6 +438,7 @@ function App() {
         refreshOpenClawEvents,
         refreshOpenClawStatus,
         refreshPendingActions,
+        refreshProjects,
     ]);
 
     // Centering Logic (Startup & Resize)
@@ -727,6 +776,8 @@ function App() {
         socket.on('project_update', (data) => {
             console.log("Project Update:", data.project);
             setCurrentProject(data.project);
+            setProjectTree(null);
+            refreshProjects();
             addMessage('System', `Switched to project: ${data.project}`);
         });
 
@@ -859,6 +910,7 @@ function App() {
             socket.off('transcription');
             socket.off('tool_confirmation_request');
             socket.off('kasa_devices');
+            socket.off('project_update');
             socket.off('printer_list');
             socket.off('simulation_status');
             socket.off('slicing_progress');
@@ -902,10 +954,13 @@ function App() {
 
     // Start/Stop Mic Visualizer
     useEffect(() => {
-        if (selectedMicId) {
+        if (selectedMicId && isConnected && !isMuted) {
             startMicVisualizer(selectedMicId);
+        } else {
+            stopMicVisualizer();
+            setMicAudioData(new Array(32).fill(0));
         }
-    }, [selectedMicId]);
+    }, [selectedMicId, isConnected, isMuted]);
 
     const startMicVisualizer = async (deviceId) => {
         stopMicVisualizer();
@@ -1371,8 +1426,10 @@ function App() {
         if (isConnected) {
             pendingPowerOnRef.current = false;
             socket.emit('stop_audio');
+            stopMicVisualizer();
+            setMicAudioData(new Array(32).fill(0));
             setIsConnected(false);
-            setIsMuted(false); // Reset mute state
+            setIsMuted(true);
             if (faceAuthEnabledRef.current) {
                 setIsAuthenticated(false);
                 setIsLockScreenVisible(false);
@@ -1399,6 +1456,8 @@ function App() {
             setIsMuted(false);
         } else {
             socket.emit('pause_audio');
+            stopMicVisualizer();
+            setMicAudioData(new Array(32).fill(0));
             setIsMuted(true);
         }
     };
@@ -2025,6 +2084,12 @@ function App() {
             kasaDevices,
             openClawStatus,
             printerCount,
+            projectTree,
+            projectTreeError,
+            projectTreeLoading,
+            projects,
+            projectsError: dashboardError.projects,
+            projectsLoading: Boolean(dashboardLoading.projects),
             showBrowserWindow,
             showCadWindow,
             showKasaWindow,
@@ -2069,6 +2134,8 @@ function App() {
                 onRefreshPending={refreshPendingActions}
                 onRefreshActivity={refreshOpenClawEvents}
                 onRefreshIntegrations={refreshIntegrationStatuses}
+                onRefreshProjects={refreshProjects}
+                onLoadProjectTree={loadProjectTree}
                 onConfirmPending={handleConfirmDashboardPending}
                 onCancelPending={handleCancelDashboardPending}
                 onPrepareLinkedInPost={handlePrepareLinkedInPost}

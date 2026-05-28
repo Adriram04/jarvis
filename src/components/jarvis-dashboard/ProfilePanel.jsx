@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Palette } from 'lucide-react';
+import { Grid3X3, Palette, Sparkles, Waves } from 'lucide-react';
 
 const themes = {
     cyan: {
@@ -26,21 +26,34 @@ const themes = {
             '--jarvis-purple': '#00A3FF',
         },
     },
+    amber: {
+        label: 'Ámbar',
+        colors: {
+            '--jarvis-cyan': '#FBBF24',
+            '--jarvis-blue': '#F59E0B',
+            '--jarvis-purple': '#22D3EE',
+        },
+    },
+    rose: {
+        label: 'Rojo',
+        colors: {
+            '--jarvis-cyan': '#FB7185',
+            '--jarvis-blue': '#F43F5E',
+            '--jarvis-purple': '#A78BFA',
+        },
+    },
 };
 
-const readInitialTheme = () => {
-    if (typeof window === 'undefined') return 'cyan';
-    return window.localStorage.getItem('jarvis-dashboard-theme') || 'cyan';
-};
-
-const readInitialGlow = () => {
-    if (typeof window === 'undefined') return 'normal';
-    return window.localStorage.getItem('jarvis-dashboard-glow') || 'normal';
+const readSetting = (key, fallback) => {
+    if (typeof window === 'undefined') return fallback;
+    return window.localStorage.getItem(key) || fallback;
 };
 
 const ProfilePanel = ({ expanded = false }) => {
-    const [theme, setTheme] = useState(readInitialTheme);
-    const [glow, setGlow] = useState(readInitialGlow);
+    const [theme, setTheme] = useState(() => readSetting('jarvis-dashboard-theme', 'cyan'));
+    const [glow, setGlow] = useState(() => readSetting('jarvis-dashboard-glow', 'normal'));
+    const [motion, setMotion] = useState(() => readSetting('jarvis-dashboard-motion', 'normal'));
+    const [grid, setGrid] = useState(() => readSetting('jarvis-dashboard-grid', 'visible'));
 
     useEffect(() => {
         const root = document.querySelector('.jarvis-dashboard-root');
@@ -50,10 +63,16 @@ const ProfilePanel = ({ expanded = false }) => {
         Object.entries(selected.colors).forEach(([key, value]) => {
             root.style.setProperty(key, value);
         });
+
         root.classList.toggle('is-soft-glow', glow === 'soft');
+        root.classList.toggle('is-calm-motion', motion === 'calm');
+        root.classList.toggle('is-grid-muted', grid === 'muted');
+
         window.localStorage.setItem('jarvis-dashboard-theme', theme);
         window.localStorage.setItem('jarvis-dashboard-glow', glow);
-    }, [theme, glow]);
+        window.localStorage.setItem('jarvis-dashboard-motion', motion);
+        window.localStorage.setItem('jarvis-dashboard-grid', grid);
+    }, [theme, glow, motion, grid]);
 
     return (
         <section className={`jarvis-profile-panel ${expanded ? 'is-open' : ''}`}>
@@ -76,21 +95,73 @@ const ProfilePanel = ({ expanded = false }) => {
                 </div>
             </div>
 
-            <div className="jarvis-theme-options compact">
-                <button
-                    type="button"
-                    className={glow === 'normal' ? 'is-active' : ''}
-                    onClick={() => setGlow('normal')}
-                >
-                    Neón
-                </button>
-                <button
-                    type="button"
-                    className={glow === 'soft' ? 'is-active' : ''}
-                    onClick={() => setGlow('soft')}
-                >
-                    Suave
-                </button>
+            <div className="jarvis-profile-section">
+                <div className="jarvis-profile-section-title">
+                    <Sparkles size={13} />
+                    Brillo
+                </div>
+                <div className="jarvis-theme-options compact">
+                    <button
+                        type="button"
+                        className={glow === 'normal' ? 'is-active' : ''}
+                        onClick={() => setGlow('normal')}
+                    >
+                        Neón
+                    </button>
+                    <button
+                        type="button"
+                        className={glow === 'soft' ? 'is-active' : ''}
+                        onClick={() => setGlow('soft')}
+                    >
+                        Suave
+                    </button>
+                </div>
+            </div>
+
+            <div className="jarvis-profile-section">
+                <div className="jarvis-profile-section-title">
+                    <Waves size={13} />
+                    Movimiento
+                </div>
+                <div className="jarvis-theme-options compact">
+                    <button
+                        type="button"
+                        className={motion === 'normal' ? 'is-active' : ''}
+                        onClick={() => setMotion('normal')}
+                    >
+                        Dinámico
+                    </button>
+                    <button
+                        type="button"
+                        className={motion === 'calm' ? 'is-active' : ''}
+                        onClick={() => setMotion('calm')}
+                    >
+                        Calma
+                    </button>
+                </div>
+            </div>
+
+            <div className="jarvis-profile-section">
+                <div className="jarvis-profile-section-title">
+                    <Grid3X3 size={13} />
+                    Retícula
+                </div>
+                <div className="jarvis-theme-options compact">
+                    <button
+                        type="button"
+                        className={grid === 'visible' ? 'is-active' : ''}
+                        onClick={() => setGrid('visible')}
+                    >
+                        Visible
+                    </button>
+                    <button
+                        type="button"
+                        className={grid === 'muted' ? 'is-active' : ''}
+                        onClick={() => setGrid('muted')}
+                    >
+                        Sutil
+                    </button>
+                </div>
             </div>
         </section>
     );

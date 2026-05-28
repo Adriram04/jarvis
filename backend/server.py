@@ -507,6 +507,88 @@ def _get_processor_label():
     )
 
 
+def _projects_root():
+    root = PROJECT_ROOT / "projects"
+    root.mkdir(exist_ok=True)
+    return root.resolve()
+
+
+def _safe_project_path(project_name: str):
+    root = _projects_root()
+    safe_name = "".join([c for c in str(project_name or "") if c.isalnum() or c in (" ", "-", "_")]).strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Project name is required.")
+
+    project_path = (root / safe_name).resolve()
+    try:
+        project_path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid project path.") from exc
+
+    if not project_path.exists() or not project_path.is_dir():
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return project_path
+
+
+def _project_summary(project_path: Path):
+    files_count = 0
+    folders_count = 0
+    latest_mtime = project_path.stat().st_mtime
+
+    for root, dirs, files in os.walk(project_path):
+        folders_count += len(dirs)
+        files_count += len(files)
+        for name in dirs + files:
+            try:
+                latest_mtime = max(latest_mtime, (Path(root) / name).stat().st_mtime)
+            except OSError:
+                pass
+
+    return {
+        "name": project_path.name,
+        "path": str(project_path),
+        "files_count": files_count,
+        "folders_count": folders_count,
+        "updated_at": datetime.fromtimestamp(latest_mtime).isoformat(),
+    }
+
+
+def _project_tree(project_path: Path, max_entries: int = 300):
+    root = project_path.resolve()
+    count = 0
+
+    def build(path: Path):
+        nonlocal count
+        if count >= max_entries:
+            return None
+        count += 1
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+
+        item = {
+            "name": path.name,
+            "path": str(path.relative_to(root)) if path != root else ".",
+            "type": "folder" if path.is_dir() else "file",
+            "size": stat.st_size if path.is_file() else None,
+            "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        }
+
+        if path.is_dir():
+            children = []
+            for child in sorted(path.iterdir(), key=lambda entry: (entry.is_file(), entry.name.lower())):
+                node = build(child)
+                if node:
+                    children.append(node)
+            item["children"] = children
+
+        return item
+
+    return build(root)
+
+
 @app.get("/status")
 async def status():
     return {
@@ -521,6 +603,24 @@ async def status():
             "memory": _get_memory_status(),
         },
     }
+
+
+@app.get("/api/projects")
+async def api_projects():
+    root = _projects_root()
+    projects = [
+        _project_summary(path)
+        for path in sorted(root.iterdir(), key=lambda entry: entry.name.lower())
+        if path.is_dir()
+    ]
+    current = audio_loop.project_manager.current_project if audio_loop and audio_loop.project_manager else None
+    return {"success": True, "projects": projects, "current_project": current}
+
+
+@app.get("/api/projects/{project_name}/tree")
+async def api_project_tree(project_name: str):
+    project_path = _safe_project_path(project_name)
+    return {"success": True, "project": _project_summary(project_path), "tree": _project_tree(project_path)}
 
 @app.post("/api/simulation/activate")
 async def api_simulation_activate():

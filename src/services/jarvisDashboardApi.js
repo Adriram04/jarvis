@@ -52,6 +52,10 @@ export const getOpenClawEvents = (limit = 10) => requestJson(`/api/openclaw/even
 
 export const getPendingActions = () => requestJson('/api/pending-actions');
 
+export const getProjects = () => requestJson('/api/projects');
+
+export const getProjectTree = (projectName) => requestJson(`/api/projects/${encodeURIComponent(projectName)}/tree`);
+
 export const confirmPendingAction = (id) => requestJson(`/api/pending-actions/${encodeURIComponent(id)}/confirm`, {
     method: 'POST',
 });

@@ -13,10 +13,10 @@ import CalendarModule from './modules/CalendarModule';
 import ChatModule from './modules/ChatModule';
 import DevicesModule from './modules/DevicesModule';
 import HomeModule from './modules/HomeModule';
+import ProjectsModule from './modules/ProjectsModule';
 import SettingsModule from './modules/SettingsModule';
 import SocialModule from './modules/SocialModule';
 import SystemModule from './modules/SystemModule';
-import VisionModule from './modules/VisionModule';
 import WebAgentModule from './modules/WebAgentModule';
 import './jarvis-dashboard.css';
 
@@ -26,7 +26,7 @@ const moduleTitles = {
     calendar: ['Agenda', 'Google Calendar real'],
     actions: ['Acciones', 'Confirmaciones pendientes'],
     social: ['Social', 'LinkedIn y WhatsApp'],
-    vision: ['Visión', 'Cámara, gestos y Face Auth'],
+    projects: ['Proyectos', 'Workspace y archivos creados'],
     cad3d: ['CAD / 3D', 'Diseño, slicing e impresión'],
     devices: ['Dispositivos', 'Kasa y smart devices'],
     web: ['Web Agent', 'Automatización web visual'],
@@ -69,6 +69,8 @@ const JarvisDashboard = ({
     onDiscoverKasa,
     onControlKasa,
     onRunWebAgent,
+    onRefreshProjects,
+    onLoadProjectTree,
 }) => {
     const timeLabel = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     const dateLabel = currentTime.toLocaleDateString('es-ES', {
@@ -133,6 +135,8 @@ const JarvisDashboard = ({
         onRefreshIntegrations,
         onRefreshPending,
         onRunWebAgent,
+        onRefreshProjects,
+        onLoadProjectTree,
         onToggleListening,
         setInputValue,
     };
@@ -144,7 +148,7 @@ const JarvisDashboard = ({
         calendar: <CalendarModule {...moduleProps} />,
         actions: <ActionsModule {...moduleProps} />,
         social: <SocialModule {...moduleProps} />,
-        vision: <VisionModule {...moduleProps} />,
+        projects: <ProjectsModule {...moduleProps} />,
         cad3d: <Cad3DModule {...moduleProps} />,
         devices: <DevicesModule {...moduleProps} />,
         web: <WebAgentModule {...moduleProps} />,
@@ -199,15 +203,12 @@ const JarvisDashboard = ({
             );
         }
 
-        if (activeModule === 'vision') {
+        if (activeModule === 'projects') {
             return (
                 <section className="jarvis-panel jarvis-list-panel">
-                    <div className="jarvis-panel-header"><h2>Visión</h2></div>
-                    <div className="jarvis-status-chip-row">
-                        <span>Cámara {isVideoOn ? 'activa' : 'inactiva'}</span>
-                        <span>Gestos {isHandTrackingEnabled ? 'activos' : 'inactivos'}</span>
-                        <span>Face Auth {faceAuthEnabled ? 'activo' : 'inactivo'}</span>
-                    </div>
+                    <div className="jarvis-panel-header"><h2>Proyecto activo</h2></div>
+                    <div className="jarvis-context-metric"><span>Actual</span><strong>{runtime.currentProject || 'No disponible'}</strong></div>
+                    <div className="jarvis-context-metric"><span>Proyectos</span><strong>{runtime.projects?.length || 0}</strong></div>
                 </section>
             );
         }
