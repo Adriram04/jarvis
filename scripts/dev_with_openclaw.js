@@ -283,13 +283,16 @@ async function startElectron() {
         throw new Error(`Vite did not become reachable at ${viteUrl}`);
     }
 
+    const electronEnv = {
+        ...process.env,
+        JARVIS_OPENCLAW_AUTO_START: 'false',
+        OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+    };
+    delete electronEnv.ELECTRON_RUN_AS_NODE;
+
     return spawnManaged('electron', electronExe, ['.'], {
         shell: false,
-        env: {
-            ...process.env,
-            JARVIS_OPENCLAW_AUTO_START: 'false',
-            OPENCLAW_GATEWAY_PORT: String(gatewayPort),
-        },
+        env: electronEnv,
     });
 }
 

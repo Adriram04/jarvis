@@ -1,13 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import io from 'socket.io-client';
 
-import Visualizer from './components/Visualizer';
-import TopAudioBar from './components/TopAudioBar';
 import CadWindow from './components/CadWindow';
 import BrowserWindow from './components/BrowserWindow';
-import ChatModule from './components/ChatModule';
-import ToolsModule from './components/ToolsModule';
-import { Mic, MicOff, Settings, X, Minus, Power, Video, VideoOff, Layout, Hand, Printer, Clock } from 'lucide-react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 // MemoryPrompt removed - memory is now actively saved to project
 import ConfirmationPopup from './components/ConfirmationPopup';
@@ -17,6 +12,7 @@ import PrinterWindow from './components/PrinterWindow';
 import SettingsWindow from './components/SettingsWindow';
 import SimulationDashboard from './components/SimulationDashboard';
 import OpenClawDashboard from './components/OpenClawDashboard';
+import JarvisDashboard from './components/jarvis-dashboard/JarvisDashboard';
 
 
 
@@ -1211,20 +1207,28 @@ function App() {
         }
     };
 
-    const handleSend = async (e) => {
-        if (e.key === 'Enter' && inputValue.trim()) {
-            const text = inputValue.trim();
+    const submitCommand = async (overrideText) => {
+        const text = (typeof overrideText === 'string' ? overrideText : inputValue).trim();
+        if (!text) return;
+
+        if (typeof overrideText !== 'string') {
             setInputValue('');
-            addMessage('You', text);
+        }
+        addMessage('You', text);
 
-            const payload = { text };
-            const freshFrame = await captureCurrentVideoFrame();
-            if (freshFrame) {
-                payload.image = freshFrame;
-                console.log(`[Vision] Attached fresh frame to text input (${freshFrame.size} bytes)`);
-            }
+        const payload = { text };
+        const freshFrame = await captureCurrentVideoFrame();
+        if (freshFrame) {
+            payload.image = freshFrame;
+            console.log(`[Vision] Attached fresh frame to text input (${freshFrame.size} bytes)`);
+        }
 
-            socket.emit('user_input', payload);
+        socket.emit('user_input', payload);
+    };
+
+    const handleSend = async (e) => {
+        if (e.key === 'Enter') {
+            await submitCommand();
         }
     };
 
@@ -1489,21 +1493,116 @@ function App() {
         bringToFront('printer');
     };
 
+    const isDashboardListening = isConnected && !isMuted;
+
+    const toggleDashboardListening = () => {
+        if (!isConnected) {
+            togglePower();
+            return;
+        }
+        toggleMute();
+    };
+
+    const handleDashboardQuickAction = (actionId) => {
+        switch (actionId) {
+            case 'create-event':
+                submitCommand('Crea un evento en mi calendario');
+                break;
+            case 'view-calendar':
+                submitCommand('Muestrame mi agenda de hoy en Google Calendar');
+                break;
+            case 'linkedin-post':
+                submitCommand('Prepara una publicación en LinkedIn');
+                break;
+            case 'manage-integrations':
+                setShowOpenClawDashboard(true);
+                bringToFront('openclaw');
+                break;
+            case 'write-email':
+                // TODO: connect to a direct email draft endpoint when the OpenClaw email flow is exposed in the UI.
+                setInputValue('Escribe un email para ');
+                addMessage('System', 'Borrador de email preparado. Completa el comando y envíalo a Jarvis.');
+                break;
+            case 'new-task':
+                // TODO: connect to a real task manager endpoint when it exists.
+                setInputValue('Crea una tarea: ');
+                addMessage('System', 'Nueva tarea preparada. Completa el comando y envíalo a Jarvis.');
+                break;
+            case 'open-notes':
+                // TODO: connect to project notes once the notes surface exists.
+                setInputValue('Abre las notas del proyecto ');
+                addMessage('System', 'Acción de notas preparada. Completa el comando y envíalo a Jarvis.');
+                break;
+            default:
+                console.warn('[Dashboard] Unhandled quick action:', actionId);
+        }
+    };
+
+    const dynamicCpu = Math.min(96, Math.max(18, Math.round(23 + audioAmp * 42)));
+    const dynamicRam = Math.min(92, Math.max(35, Math.round(45 + audioAmp * 28)));
+    const recentDashboardActivity = messages.slice(-3).reverse().map((message) => ({
+        title: `${message.sender}: ${String(message.text).slice(0, 54)}`,
+        meta: 'Conversación con Jarvis',
+        time: message.time
+    }));
+
+    const dashboardData = {
+        metrics: [
+            { label: 'CPU', value: dynamicCpu, unit: '%', percent: dynamicCpu },
+            { label: 'RAM', value: dynamicRam, unit: '%', percent: dynamicRam },
+            { label: 'Red', value: socketConnected ? '120 Mbps' : 'Offline', connected: socketConnected, detail: socketConnected ? 'Socket activo' : 'Sin conexión' },
+        ],
+        connections: [
+            { label: 'Google Calendar', value: 'Conectado', detail: 'OpenClaw productivity', tone: 'green' },
+            { label: 'LinkedIn', value: 'Conectado', detail: 'Publicaciones listas', tone: 'green' },
+            { label: 'WhatsApp', value: 'Conectado', detail: 'Gateway OpenClaw', tone: 'green' },
+        ],
+        agenda: [
+            { time: '18:00', end: '18:30', title: 'Reunión de proyecto', location: 'Microsoft Teams', tone: 'cyan' },
+            { time: '20:30', end: '21:00', title: 'Entrenamiento', location: 'Gimnasio', tone: 'green' },
+            { time: '22:00', end: '22:30', title: 'Repasar documentación', location: 'Personal', tone: 'purple' },
+        ],
+        tasks: [
+            { title: 'Terminar informe TFG', detail: 'Alta prioridad', priority: 'high' },
+            { title: 'Enviar propuesta a Deuser', detail: 'Media prioridad', priority: 'medium' },
+            { title: 'Estudiar estructura API', detail: 'Baja prioridad', priority: 'low' },
+        ],
+        integrations: [
+            { name: 'Google Calendar', shortName: '31', meta: 'Sincronizado', tone: 'green' },
+            { name: 'LinkedIn', shortName: 'in', meta: 'Conectado', tone: 'cyan' },
+            { name: 'WhatsApp', shortName: 'WA', meta: 'OpenClaw activo', tone: 'green' },
+        ],
+        recentActivity: recentDashboardActivity.length > 0 ? recentDashboardActivity : [
+            { title: 'Publicación en LinkedIn completada', meta: 'Completado', time: '18:40' },
+            { title: 'Evento creado', meta: 'Completado', time: '18:35' },
+            { title: 'Email enviado', meta: 'Completado', time: '17:12' },
+        ],
+    };
+
 
 
     return (
-        <div className="h-screen w-screen bg-black text-cyan-100 font-mono overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white">
-
-            {/* --- PREMIUM UI LAYER --- */}
-
-            {/* --- PREMIUM UI LAYER --- */}
-
-            {/* --- PREMIUM UI LAYER --- */}
-
-            {/* Logic: Show AuthLock if we are NOT authenticated AND (Lock Screen is visible OR Auth is Enabled) 
-                Actually, simpler: isLockScreenVisible is the source of truth for visibility.
-                We set isLockScreenVisible = true via socket if auth is required.
-             */}
+        <div className="jarvis-runtime-shell">
+            <JarvisDashboard
+                currentTime={currentTime}
+                status={status}
+                socketConnected={socketConnected}
+                isConnected={isConnected}
+                isListening={isDashboardListening}
+                isVideoOn={isVideoOn}
+                isHandTrackingEnabled={isHandTrackingEnabled}
+                inputValue={inputValue}
+                setInputValue={setInputValue}
+                onCommandSubmit={submitCommand}
+                onToggleListening={toggleDashboardListening}
+                onQuickAction={handleDashboardQuickAction}
+                onOpenSettings={() => setShowSettings(true)}
+                onMinimize={handleMinimize}
+                onMaximize={handleMaximize}
+                onClose={handleCloseRequest}
+                dashboardData={dashboardData}
+                audioLevel={audioAmp}
+            />
 
             {isLockScreenVisible && (
                 <AuthLock
@@ -1513,364 +1612,149 @@ function App() {
                 />
             )}
 
-            {/* --- PREMIUM UI LAYER --- */}
-
-            {/* Hand Cursor - Only show if tracking is enabled */}
-            {isVideoOn && isHandTrackingEnabled && (
+            {isHandTrackingEnabled && (
                 <div
-                    className={`fixed w-6 h-6 border-2 rounded-full pointer-events-none z-[100] transition-transform duration-75 ${isPinching ? 'bg-cyan-400 border-cyan-400 scale-75 shadow-[0_0_15px_rgba(34,211,238,0.8)]' : 'border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.3)]'}`}
-                    style={{
-                        left: cursorPos.x,
-                        top: cursorPos.y,
-                        transform: 'translate(-50%, -50%)'
-                    }}
+                    className={`jarvis-hand-cursor ${isPinching ? 'is-pinching' : ''}`}
+                    style={{ left: cursorPos.x, top: cursorPos.y }}
                 >
-                    {/* Center Dot for precision */}
-                    <div className="absolute top-1/2 left-1/2 w-1 h-1 bg-white rounded-full -translate-x-1/2 -translate-y-1/2" />
+                    <span />
                 </div>
             )}
 
-            {/* Background Grid/Effects - ALIVE BACKGROUND (Fixed: Static opacity) */}
-            <div
-                className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900 via-black to-black z-0 pointer-events-none"
-                style={{ opacity: 0.6 }}
-            ></div>
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 z-0 pointer-events-none mix-blend-overlay"></div>
-
-            {/* Ambient Glow (Fixed: Static) */}
-            <div
-                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-cyan-900/10 rounded-full blur-[120px] pointer-events-none"
-            />
-
-            {/* Top Bar (Draggable) */}
-            <div className="z-50 flex items-center justify-between p-2 border-b border-cyan-500/20 bg-black/40 backdrop-blur-md select-none sticky top-0" style={{ WebkitAppRegion: 'drag' }}>
-                <div className="flex items-center gap-4 pl-2">
-                    <h1 className="text-xl font-bold tracking-[0.2em] text-cyan-400 drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]">
-                        J.A.R.V.I.S
-                    </h1>
-                    <div className="text-[10px] text-cyan-700 border border-cyan-900 px-1 rounded">
-                        V2.0.0
-                    </div>
-                    {simulationState.simulation_mode && (
-                        <button
-                            onClick={() => {
-                                setShowSimulationDashboard(true);
-                                bringToFront('simulation');
-                            }}
-                            style={{ WebkitAppRegion: 'no-drag' }}
-                            className="text-[10px] text-green-300 border border-green-400/30 bg-green-400/10 px-2 py-0.5 rounded ml-2"
-                        >
-                            SIMULATION ACTIVE
-                        </button>
-                    )}
-                    {/* FPS Counter */}
-                    {isVideoOn && (
-                        <div className="text-[10px] text-green-500 border border-green-900 px-1 rounded ml-2">
-                            FPS: {fps}
-                        </div>
-                    )}
-                    {/* Connected Printers Count */}
-                    {printerCount > 0 && (
-                        <div className="flex items-center gap-1.5 text-[10px] text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded ml-2">
-                            <Printer size={10} className="text-green-400" />
-                            <span>{printerCount} Printer{printerCount !== 1 ? 's' : ''}</span>
-                        </div>
-                    )}
-                    {/* Connected Smart Devices Count */}
-                    {kasaDevices.length > 0 && (
-                        <div className="flex items-center gap-1.5 text-[10px] text-yellow-400 border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 rounded ml-2">
-                            <span>💡</span>
-                            <span>{kasaDevices.length} Device{kasaDevices.length !== 1 ? 's' : ''}</span>
-                        </div>
-                    )}
-                </div>
-
-                {/* Top Visualizer (User Mic) */}
-                <div className="flex-1 flex justify-center mx-4">
-                    <TopAudioBar audioData={micAudioData} />
-                </div>
-
-                <div className="flex items-center gap-2 pr-2" style={{ WebkitAppRegion: 'no-drag' }}>
-                    {/* Live Clock */}
-                    <div className="flex items-center gap-1.5 text-[11px] text-cyan-300/70 font-mono px-2">
-                        <Clock size={12} className="text-cyan-500/50" />
-                        <span>{currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    </div>
-                    <button onClick={handleMinimize} className="p-1 hover:bg-cyan-900/50 rounded text-cyan-500 transition-colors">
-                        <Minus size={18} />
-                    </button>
-                    <button onClick={handleMaximize} className="p-1 hover:bg-cyan-900/50 rounded text-cyan-500 transition-colors">
-                        <div className="w-[14px] h-[14px] border-2 border-current rounded-[2px]" />
-                    </button>
-                    <button onClick={handleCloseRequest} className="p-1 hover:bg-red-900/50 rounded text-red-500 transition-colors">
-                        <X size={18} />
-                    </button>
+            <div className={`jarvis-video-feed ${isVideoOn ? 'is-visible' : ''}`}>
+                <video ref={videoRef} autoPlay muted className="jarvis-video-source" />
+                <div className="jarvis-video-frame">
+                    <div className="jarvis-video-label">CAM_01 {fps > 0 ? `| ${fps} FPS` : ''}</div>
+                    <canvas
+                        ref={canvasRef}
+                        className="jarvis-video-canvas"
+                        style={{ transform: isCameraFlipped ? 'scaleX(-1)' : 'none' }}
+                    />
                 </div>
             </div>
 
-            {/* Main Content */}
-            <div className="flex-1 relative z-10 flex flex-col items-center justify-center">
-                {/* Central Visualizer (AI Audio) */}
+            {showSettings && (
+                <SettingsWindow
+                    socket={socket}
+                    micDevices={micDevices}
+                    speakerDevices={speakerDevices}
+                    webcamDevices={webcamDevices}
+                    selectedMicId={selectedMicId}
+                    setSelectedMicId={setSelectedMicId}
+                    selectedSpeakerId={selectedSpeakerId}
+                    setSelectedSpeakerId={setSelectedSpeakerId}
+                    selectedWebcamId={selectedWebcamId}
+                    setSelectedWebcamId={setSelectedWebcamId}
+                    cursorSensitivity={cursorSensitivity}
+                    setCursorSensitivity={setCursorSensitivity}
+                    isCameraFlipped={isCameraFlipped}
+                    setIsCameraFlipped={setIsCameraFlipped}
+                    handleFileUpload={handleFileUpload}
+                    onClose={() => setShowSettings(false)}
+                />
+            )}
+
+            {showCadWindow && (
                 <div
-                    id="visualizer"
-                    className={`absolute flex items-center justify-center transition-all duration-200 
-                        backdrop-blur-xl bg-black/30 border border-white/10 shadow-2xl overflow-visible
-                        ${isModularMode ? (activeDragElement === 'visualizer' ? 'ring-2 ring-green-500 bg-green-500/10' : 'ring-1 ring-yellow-500/30 bg-yellow-500/5') + ' rounded-2xl pointer-events-auto' : 'rounded-2xl pointer-events-none'}
-                    `}
+                    id="cad"
+                    className={`jarvis-floating-window ${activeDragElement === 'cad' ? 'is-dragging' : ''}`}
                     style={{
-                        left: elementPositions.visualizer.x,
-                        top: elementPositions.visualizer.y,
-                        transform: 'translate(-50%, -50%)',
-                        width: elementSizes.visualizer.w,
-                        height: elementSizes.visualizer.h
+                        left: elementPositions.cad?.x || window.innerWidth / 2,
+                        top: elementPositions.cad?.y || window.innerHeight / 2,
+                        width: `${elementSizes.cad.w}px`,
+                        height: `${elementSizes.cad.h}px`,
+                        zIndex: getZIndex('cad')
                     }}
-                    onMouseDown={(e) => handleMouseDown(e, 'visualizer')}
+                    onMouseDown={(e) => handleMouseDown(e, 'cad')}
                 >
-                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay z-10"></div>
-                    <div className="relative z-20">
-                        <Visualizer
-                            audioData={aiAudioData}
-                            isListening={isConnected && !isMuted}
-                            intensity={audioAmp}
-                            width={elementSizes.visualizer.w}
-                            height={elementSizes.visualizer.h}
+                    <div data-drag-handle className="jarvis-floating-window-header">
+                        <span>CAD PROTOTYPE</span>
+                        <button type="button" onClick={() => setShowCadWindow(false)}>X</button>
+                    </div>
+                    <div className="jarvis-floating-window-body">
+                        <CadWindow
+                            data={cadData}
+                            thoughts={cadThoughts}
+                            retryInfo={cadRetryInfo}
+                            onClose={() => setShowCadWindow(false)}
+                            onRequestPrint={openPrinterWindow}
+                            socket={socket}
                         />
                     </div>
-                    {isModularMode && <div className={`absolute top-2 right-2 text-xs font-bold tracking-widest z-20 ${activeDragElement === 'visualizer' ? 'text-green-500' : 'text-yellow-500/50'}`}>VISUALIZER</div>}
                 </div>
+            )}
 
-                {/* Video Feed Overlay */}
-                {/* Floating Project Label */}
-                <div className="absolute top-[70px] left-1/2 -translate-x-1/2 text-cyan-500 text-xs font-mono tracking-widest pointer-events-none z-50 bg-black/50 px-2 py-1 rounded backdrop-blur-sm border border-cyan-500/20">
-                    PROJECT: {currentProject?.toUpperCase()}
-                </div>
-
+            {showBrowserWindow && (
                 <div
-                    id="video"
-                    className={`fixed bottom-4 right-4 transition-all duration-200 
-                        ${isVideoOn ? 'opacity-100' : 'opacity-0 pointer-events-none'} 
-                        backdrop-blur-md bg-black/40 border border-white/10 shadow-xl rounded-xl
-                    `}
-                    style={{ zIndex: 20 }}
+                    id="browser"
+                    className={`jarvis-floating-window browser ${activeDragElement === 'browser' ? 'is-dragging' : ''}`}
+                    style={{
+                        left: elementPositions.browser?.x || window.innerWidth / 2 - 200,
+                        top: elementPositions.browser?.y || window.innerHeight / 2,
+                        width: `${elementSizes.browser.w}px`,
+                        height: `${elementSizes.browser.h}px`,
+                        zIndex: getZIndex('browser')
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, 'browser')}
                 >
-                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none mix-blend-overlay"></div>
-                    {/* Compact Display Container (1080p Source) */}
-                    <div className="relative border border-cyan-500/30 rounded-lg overflow-hidden shadow-[0_0_20px_rgba(6,182,212,0.1)] w-80 aspect-video bg-black/80">
-                        {/* Hidden Video Element (Source) */}
-                        <video ref={videoRef} autoPlay muted className="absolute inset-0 w-full h-full object-cover opacity-0" />
-
-                        <div className="absolute top-2 left-2 text-[10px] text-cyan-400 bg-black/60 backdrop-blur px-2 py-0.5 rounded border border-cyan-500/20 z-10 font-bold tracking-wider">CAM_01</div>
-
-                        {/* Canvas for Displaying Video + Skeleton (Ensures overlap) */}
-                        <canvas
-                            ref={canvasRef}
-                            className="absolute inset-0 w-full h-full opacity-80"
-                            style={{ transform: isCameraFlipped ? 'scaleX(-1)' : 'none' }}
-                        />
-                    </div>
-                </div>
-
-                {/* Settings Modal - Moved outside Video so it shows independently */}
-                {showSettings && (
-                    <SettingsWindow
+                    <BrowserWindow
+                        imageSrc={browserData.image}
+                        logs={browserData.logs}
+                        onClose={() => setShowBrowserWindow(false)}
                         socket={socket}
-                        micDevices={micDevices}
-                        speakerDevices={speakerDevices}
-                        webcamDevices={webcamDevices}
-                        selectedMicId={selectedMicId}
-                        setSelectedMicId={setSelectedMicId}
-                        selectedSpeakerId={selectedSpeakerId}
-                        setSelectedSpeakerId={setSelectedSpeakerId}
-                        selectedWebcamId={selectedWebcamId}
-                        setSelectedWebcamId={setSelectedWebcamId}
-                        cursorSensitivity={cursorSensitivity}
-                        setCursorSensitivity={setCursorSensitivity}
-                        isCameraFlipped={isCameraFlipped}
-                        setIsCameraFlipped={setIsCameraFlipped}
-                        handleFileUpload={handleFileUpload}
-                        onClose={() => setShowSettings(false)}
                     />
-                )}
+                </div>
+            )}
 
-                {/* CAD Window Overlay - Moved outside of Video so it can show independently */}
-                {showCadWindow && (
-                    <div
-                        id="cad"
-                        className={`absolute flex flex-col transition-all duration-200 
-                        backdrop-blur-xl bg-black/40 border border-white/10 shadow-2xl overflow-hidden rounded-2xl
-                        ${activeDragElement === 'cad' ? 'ring-2 ring-green-500 bg-green-500/10' : ''}
-                    `}
-                        style={{
-                            left: elementPositions.cad?.x || window.innerWidth / 2,
-                            top: elementPositions.cad?.y || window.innerHeight / 2,
-                            transform: 'translate(-50%, -50%)',
-                            width: `${elementSizes.cad.w}px`,
-                            height: `${elementSizes.cad.h}px`,
-                            pointerEvents: 'auto',
-                            zIndex: getZIndex('cad')
-                        }}
-                        onMouseDown={(e) => handleMouseDown(e, 'cad')}
-                    >
-                        {/* Drag Handle Header */}
-                        <div
-                            data-drag-handle
-                            className="h-8 bg-gray-900/80 border-b border-cyan-500/20 flex items-center justify-between px-3 cursor-grab active:cursor-grabbing shrink-0"
-                        >
-                            <span className="text-xs font-bold tracking-widest text-cyan-500/70">CAD PROTOTYPE</span>
-                            <button
-                                onClick={() => setShowCadWindow(false)}
-                                className="text-gray-400 hover:text-red-400 hover:bg-red-500/20 p-1 rounded transition-colors"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay z-10"></div>
-                        <div className="relative z-20 flex-1 min-h-0">
-                            <CadWindow
-                                data={cadData}
-                                thoughts={cadThoughts}
-                                retryInfo={cadRetryInfo}
-                                onClose={() => setShowCadWindow(false)}
-                                onRequestPrint={openPrinterWindow}
-                                socket={socket}
-                            />
-                        </div>
-                    </div>
-                )}
-
-
-                {/* Browser Window Overlay */}
-                {showBrowserWindow && (
-                    <div
-                        id="browser"
-                        className={`absolute flex flex-col transition-all duration-200 
-                        backdrop-blur-xl bg-black/40 border border-white/10 shadow-2xl overflow-hidden rounded-lg
-                        ${activeDragElement === 'browser' ? 'ring-2 ring-green-500 bg-green-500/10' : ''}
-                    `}
-                        style={{
-                            left: elementPositions.browser?.x || window.innerWidth / 2 - 200,
-                            top: elementPositions.browser?.y || window.innerHeight / 2,
-                            transform: 'translate(-50%, -50%)',
-                            width: `${elementSizes.browser.w}px`,
-                            height: `${elementSizes.browser.h}px`,
-                            pointerEvents: 'auto',
-                            zIndex: getZIndex('browser')
-                        }}
-                        onMouseDown={(e) => handleMouseDown(e, 'browser')}
-                    >
-                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay z-10"></div>
-                        <div className="relative z-20 w-full h-full">
-                            <BrowserWindow
-                                imageSrc={browserData.image}
-                                logs={browserData.logs}
-                                onClose={() => setShowBrowserWindow(false)}
-                                socket={socket}
-                            />
-                        </div>
-                    </div>
-                )}
-
-
-                {/* Chat Module */}
-                <ChatModule
-                    messages={messages}
-                    inputValue={inputValue}
-                    setInputValue={setInputValue}
-                    handleSend={handleSend}
-                    isModularMode={isModularMode}
+            {showKasaWindow && (
+                <KasaWindow
+                    socket={socket}
+                    position={elementPositions.kasa}
                     activeDragElement={activeDragElement}
-                    position={elementPositions.chat}
-                    width={elementSizes.chat.w}
-                    height={elementSizes.chat.h}
-                    onMouseDown={(e) => handleMouseDown(e, 'chat')}
+                    setActiveDragElement={setActiveDragElement}
+                    devices={kasaDevices}
+                    onClose={() => setShowKasaWindow(false)}
+                    onMouseDown={(e) => handleMouseDown(e, 'kasa')}
+                    zIndex={getZIndex('kasa')}
                 />
+            )}
 
-                {/* Footer Controls / Tools Module */}
-                <div className="z-20 flex justify-center pb-10 pointer-events-none">
-                    <ToolsModule
-                        isConnected={isConnected}
-                        isMuted={isMuted}
-                        isVideoOn={isVideoOn}
-                        isHandTrackingEnabled={isHandTrackingEnabled}
-                        showSettings={showSettings}
-                        onTogglePower={togglePower}
-                        onToggleMute={toggleMute}
-                        onToggleVideo={toggleVideo}
-                        onToggleSettings={() => setShowSettings(!showSettings)}
-                        onToggleHand={() => setIsHandTrackingEnabled(!isHandTrackingEnabled)}
-                        onToggleKasa={toggleKasaWindow}
-                        showKasaWindow={showKasaWindow}
-                        onTogglePrinter={togglePrinterWindow}
-                        showPrinterWindow={showPrinterWindow}
-                        onToggleSimulation={toggleSimulationDashboard}
-                        showSimulationDashboard={showSimulationDashboard}
-                        onToggleOpenClaw={toggleOpenClawDashboard}
-                        showOpenClawDashboard={showOpenClawDashboard}
-                        onToggleCad={() => setShowCadWindow(!showCadWindow)}
-                        showCadWindow={showCadWindow}
-                        onToggleBrowser={() => setShowBrowserWindow(!showBrowserWindow)}
-                        showBrowserWindow={showBrowserWindow}
-                        activeDragElement={activeDragElement}
-                        position={elementPositions.tools}
-                        onMouseDown={(e) => handleMouseDown(e, 'tools')}
-                    />
-                </div>
-
-                {/* Kasa Window */}
-                {showKasaWindow && (
-                    <KasaWindow
-                        socket={socket}
-                        position={elementPositions.kasa}
-                        activeDragElement={activeDragElement}
-                        setActiveDragElement={setActiveDragElement}
-                        devices={kasaDevices}
-                        onClose={() => setShowKasaWindow(false)}
-                        onMouseDown={(e) => handleMouseDown(e, 'kasa')}
-                        zIndex={getZIndex('kasa')}
-                    />
-                )}
-
-                {/* Printer Window */}
-                {showPrinterWindow && (
-                    <PrinterWindow
-                        socket={socket}
-                        onClose={() => setShowPrinterWindow(false)}
-                        position={elementPositions.printer}
-                        onMouseDown={(e) => handleMouseDown(e, 'printer')}
-                        activeDragElement={activeDragElement}
-                        setActiveDragElement={setActiveDragElement}
-                        zIndex={getZIndex('printer')}
-                    />
-                )}
-
-                {showSimulationDashboard && (
-                    <SimulationDashboard
-                        socket={socket}
-                        onClose={() => setShowSimulationDashboard(false)}
-                        position={elementPositions.simulation}
-                        onMouseDown={(e) => handleMouseDown(e, 'simulation')}
-                        zIndex={getZIndex('simulation')}
-                    />
-                )}
-
-                {showOpenClawDashboard && (
-                    <OpenClawDashboard
-                        onClose={() => setShowOpenClawDashboard(false)}
-                        position={elementPositions.openclaw}
-                        onMouseDown={(e) => handleMouseDown(e, 'openclaw')}
-                        zIndex={getZIndex('openclaw')}
-                    />
-                )}
-
-                {/* Memory Prompt removed - memory is now actively saved to project */}
-
-                {/* Tool Confirmation Modal */}
-                <ConfirmationPopup
-                    request={confirmationRequest}
-                    onConfirm={handleConfirmTool}
-                    onDeny={handleDenyTool}
+            {showPrinterWindow && (
+                <PrinterWindow
+                    socket={socket}
+                    onClose={() => setShowPrinterWindow(false)}
+                    position={elementPositions.printer}
+                    onMouseDown={(e) => handleMouseDown(e, 'printer')}
+                    activeDragElement={activeDragElement}
+                    setActiveDragElement={setActiveDragElement}
+                    zIndex={getZIndex('printer')}
                 />
-            </div>
+            )}
+
+            {showSimulationDashboard && (
+                <SimulationDashboard
+                    socket={socket}
+                    onClose={() => setShowSimulationDashboard(false)}
+                    position={elementPositions.simulation}
+                    onMouseDown={(e) => handleMouseDown(e, 'simulation')}
+                    zIndex={getZIndex('simulation')}
+                />
+            )}
+
+            {showOpenClawDashboard && (
+                <OpenClawDashboard
+                    onClose={() => setShowOpenClawDashboard(false)}
+                    position={elementPositions.openclaw}
+                    onMouseDown={(e) => handleMouseDown(e, 'openclaw')}
+                    zIndex={getZIndex('openclaw')}
+                />
+            )}
+
+            <ConfirmationPopup
+                request={confirmationRequest}
+                onConfirm={handleConfirmTool}
+                onDeny={handleDenyTool}
+            />
         </div>
     );
 }
