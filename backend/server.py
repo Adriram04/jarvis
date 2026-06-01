@@ -41,6 +41,7 @@ for import_path in (PROJECT_ROOT, BACKEND_DIR):
         sys.path.insert(0, import_path_str)
 
 import backend.jarvis as jarvis
+from automation_manager import AutomationManager
 from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
 from integrations.openclaw_bridge import OpenClawBridge
@@ -57,6 +58,7 @@ from permissions_manager import PermissionsManager
 from simulation_manager import simulation_manager
 from simulators.kasa_simulator import kasa_simulator
 from simulators.printer_simulator import printer_simulator
+from workflow_manager import WorkflowManager
 
 # Create a Socket.IO server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
@@ -260,6 +262,10 @@ openclaw_autopilot_manager = OpenClawAutopilotManager()
 openclaw_targets_manager = OpenClawTargetsManager()
 openclaw_events_manager = OpenClawEventsManager()
 openclaw_messages_manager = OpenClawMessagesManager()
+automation_manager = AutomationManager()
+workflow_manager = None
+automation_scheduler_task = None
+printer_finished_events = set()
 SETTINGS_FILE = BACKEND_DIR / "settings.json"
 REFERENCE_IMAGE_FILE = BACKEND_DIR / "reference.jpg"
 
@@ -402,6 +408,7 @@ async def require_fresh_face_auth(reload_reference=False):
 
 @app.on_event("startup")
 async def startup_event():
+    global automation_scheduler_task
     import sys
     print(f"[SERVER DEBUG] Startup Event Triggered")
     print(f"[SERVER DEBUG] Python Version: {sys.version}")
@@ -415,6 +422,10 @@ async def startup_event():
 
     print("[SERVER] Startup: Initializing Kasa Agent...")
     await kasa_agent.initialize()
+    if automation_scheduler_task is None or automation_scheduler_task.done():
+        automation_scheduler_task = asyncio.create_task(_automation_scheduler_loop())
+        print("[SERVER] Automation scheduler started.")
+    await dispatch_automation_event("system.startup", {"started_at": datetime.now().isoformat(timespec="seconds")})
 
 class _MemoryStatusEx(ctypes.Structure):
     _fields_ = [
@@ -972,6 +983,17 @@ async def _execute_or_queue_openclaw_action(action_type, payload, human_summary=
             payload or {},
             human_summary or _openclaw_human_summary(action_type, payload or {}),
         )
+        workflow_context = (payload or {}).get("_workflow_context") if isinstance(payload, dict) else {}
+        if not isinstance(workflow_context, dict) or workflow_context.get("event_type") != "pending_action.created":
+            await dispatch_automation_event(
+                "pending_action.created",
+                {
+                    "pending_action": pending,
+                    "action_type": action_type,
+                    "payload": _public_openclaw_payload(payload or {}),
+                    "human_summary": pending.get("human_summary"),
+                },
+            )
         return _openclaw_local_result(
             action_type,
             f"Accion pendiente de confirmacion. ID: {pending['id']}",
@@ -981,6 +1003,164 @@ async def _execute_or_queue_openclaw_action(action_type, payload, human_summary=
         )
 
     return await _execute_openclaw_action(action_type, payload)
+
+
+def _get_workflow_manager():
+    global workflow_manager
+    if workflow_manager is None:
+        workflow_manager = WorkflowManager(_execute_or_queue_openclaw_action)
+    return workflow_manager
+
+
+def _automation_event_message(event_type, automation, result, source):
+    name = (automation or {}).get("name") or (result or {}).get("automation", {}).get("name") or "Automatizacion"
+    status_text = (result or {}).get("status") or (result or {}).get("result", {}).get("status") or "sin_estado"
+    return f"{event_type}: {name} ({source}): {status_text}"
+
+
+def _record_automation_event(event_type, automation, result=None, source="scheduler", error=None):
+    try:
+        return openclaw_events_manager.add_event(
+            event_type,
+            channel="automation",
+            kind=source,
+            display_target=(automation or {}).get("name"),
+            message=str(error) if error else _automation_event_message(event_type, automation, result, source),
+            success=not bool(error) and event_type not in {"automation.failed", "automation.waiting_for_confirmation"},
+            error=str(error) if error else None,
+            raw={"event_type": event_type, "automation": automation or {}, "result": result or {}, "source": source},
+        )
+    except Exception as exc:
+        print(f"[AUTOMATION] Failed to record event: {exc}")
+        return None
+
+
+async def _record_and_dispatch_automation_event(event_type, automation, result=None, source="scheduler", error=None):
+    event = _record_automation_event(event_type, automation, result=result, source=source, error=error)
+    if str(source or "").startswith("event:automation."):
+        return event
+    await dispatch_automation_event(
+        event_type,
+        {
+            "automation": automation or {},
+            "result": result or {},
+            "source": source,
+            "event": event,
+            "error": str(error) if error else None,
+        },
+    )
+    return event
+
+
+async def _run_automation_by_id(automation_id, source="manual", event_type=None, event_payload=None):
+    automation, claim_state = automation_manager.claim_automation_for_run(automation_id)
+    if claim_state == "not_found":
+        return _api_error("No encuentro esa automatizacion.", status_code=404)
+    if claim_state == "already_running":
+        result = {
+            "success": False,
+            "status": "skipped_already_running",
+            "automation": automation,
+            "summary": "La automatizacion ya esta en ejecucion.",
+        }
+        await _record_and_dispatch_automation_event(
+            "automation.skipped_already_running",
+            automation,
+            result=result,
+            source=source,
+        )
+        return _api_success(result)
+
+    try:
+        await _record_and_dispatch_automation_event(
+            "automation.started",
+            automation,
+            result={"success": True, "status": "started"},
+            source=source,
+        )
+        workflow_result = await _get_workflow_manager().execute_workflow(
+            automation.get("workflow") or {},
+            automation={
+                **automation,
+                "source": source,
+                "event_type": event_type,
+                "event_payload": event_payload,
+            },
+        )
+        updated = automation_manager.mark_run(automation_id, result=workflow_result)
+        status = workflow_result.get("status")
+        lifecycle_event = "automation.completed"
+        if status == "waiting_for_confirmation":
+            lifecycle_event = "automation.waiting_for_confirmation"
+        elif not workflow_result.get("success"):
+            lifecycle_event = "automation.failed"
+        api_result = {
+            "success": bool(workflow_result.get("success")),
+            "status": status,
+            "automation": updated,
+            "result": workflow_result,
+        }
+        await _record_and_dispatch_automation_event(
+            lifecycle_event,
+            updated or automation,
+            result=api_result,
+            source=source,
+        )
+        return _api_success(api_result)
+    except Exception as exc:
+        error_result = {"success": False, "status": "exception", "summary": str(exc), "error": str(exc)}
+        updated = automation_manager.mark_run(automation_id, result=error_result)
+        await _record_and_dispatch_automation_event(
+            "automation.failed",
+            updated or automation,
+            result=error_result,
+            source=source,
+            error=exc,
+        )
+        return _api_error(str(exc), data={"automation": automation})
+    finally:
+        automation_manager.release_automation_run(automation_id)
+
+
+async def dispatch_automation_event(event_type, payload=None):
+    event_type = str(event_type or "").strip()
+    if not event_type:
+        return {"event_type": "", "matched": 0, "results": [], "error": "event_type is required"}
+
+    payload = payload or {}
+    matches = automation_manager.automations_for_event(event_type, payload)
+    results = []
+    for automation in matches:
+        response = await _run_automation_by_id(
+            automation.get("id"),
+            source=f"event:{event_type}",
+            event_type=event_type,
+            event_payload=payload,
+        )
+        results.append(
+            {
+                "automation_id": automation.get("id"),
+                "name": automation.get("name"),
+                "response": response,
+            }
+        )
+    return {"event_type": event_type, "matched": len(matches), "results": results}
+
+
+async def _automation_scheduler_loop():
+    await asyncio.sleep(5)
+    while True:
+        try:
+            await dispatch_automation_event("scheduler.tick", {"checked_at": datetime.now().isoformat(timespec="seconds")})
+            for automation in automation_manager.due_automations():
+                print(f"[AUTOMATION] Running due automation: {automation.get('name')}")
+                await _run_automation_by_id(automation.get("id"), source="scheduler")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[AUTOMATION] Scheduler error: {exc}")
+        await asyncio.sleep(30)
+
 
 async def _execute_confirmed_pending_action(action):
     if not action:
@@ -1097,6 +1277,9 @@ async def _notify_pending_action_resolution(result, source="panel", room=None):
                 ),
                 end_of_turn=True,
             )
+            await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=room)
+            if audio_loop and getattr(audio_loop, "project_manager", None):
+                audio_loop.project_manager.log_chat("JARVIS", message)
             return
         except Exception as exc:
             print(f"[SERVER] Could not notify live Jarvis session about pending action resolution: {exc}")
@@ -1466,6 +1649,10 @@ async def api_openclaw_send_pending(data: dict = Body(default={})):
         payload,
         _openclaw_human_summary("send_message", payload),
     )
+    await dispatch_automation_event(
+        "pending_action.created",
+        {"pending_action": pending, "source": "api_openclaw_send_pending", "payload": payload},
+    )
     return _api_success({"pending_action_id": pending["id"], "pending_action": pending})
 
 @app.get("/api/openclaw/events")
@@ -1477,6 +1664,63 @@ async def api_openclaw_action(data: dict = Body(default={})):
     action_type = data.get("action_type") or data.get("type")
     payload = data.get("payload") or {}
     return _api_from_openclaw_result(await _execute_or_queue_openclaw_action(action_type, payload))
+
+
+@app.get("/api/automations")
+async def api_automations_list():
+    return _api_success({"automations": automation_manager.list_automations()})
+
+
+@app.post("/api/automations")
+async def api_automations_create(data: dict = Body(default={})):
+    try:
+        automation = automation_manager.create_automation(data)
+    except ValueError as exc:
+        return _api_error(str(exc), status_code=400)
+    return _api_success({"automation": automation})
+
+
+@app.post("/api/automations/events/dispatch")
+async def api_automations_event_dispatch(data: dict = Body(default={})):
+    event_type = data.get("event_type") or data.get("type")
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    if not str(event_type or "").strip():
+        return _api_error("event_type es obligatorio.", status_code=400)
+    result = await dispatch_automation_event(event_type, payload)
+    return _api_success(result)
+
+
+@app.get("/api/automations/{automation_id}")
+async def api_automations_get(automation_id: str):
+    automation = automation_manager.get_automation(automation_id)
+    if not automation:
+        return _api_error("No encuentro esa automatizacion.", status_code=404)
+    return _api_success({"automation": automation})
+
+
+@app.put("/api/automations/{automation_id}")
+async def api_automations_update(automation_id: str, data: dict = Body(default={})):
+    try:
+        automation = automation_manager.update_automation(automation_id, data)
+    except ValueError as exc:
+        return _api_error(str(exc), status_code=400)
+    if not automation:
+        return _api_error("No encuentro esa automatizacion.", status_code=404)
+    return _api_success({"automation": automation})
+
+
+@app.delete("/api/automations/{automation_id}")
+async def api_automations_delete(automation_id: str):
+    automation = automation_manager.delete_automation(automation_id)
+    if not automation:
+        return _api_error("No encuentro esa automatizacion.", status_code=404)
+    return _api_success({"automation": automation})
+
+
+@app.post("/api/automations/{automation_id}/run")
+async def api_automations_run(automation_id: str):
+    return await _run_automation_by_id(automation_id, source="manual")
+
 
 @app.post("/api/openclaw/inbound")
 async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
@@ -1497,6 +1741,17 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
         success=True,
         raw=data,
     )
+    automation_dispatch = await dispatch_automation_event(
+        "openclaw.inbound_message",
+        {
+            "incoming": incoming_message,
+            "message": stored_message,
+            "stored_message": stored_message,
+            "target": target_record,
+            "event": inbound_event,
+            "raw": data,
+        },
+    )
 
     if not _env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
         return _api_success(
@@ -1506,6 +1761,7 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
                 "stored_message": stored_message,
                 "target": target_record,
                 "event": inbound_event,
+                "automation_dispatch": automation_dispatch,
                 "matched": False,
                 "results": [],
             },
@@ -1522,6 +1778,7 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
                 "stored_message": stored_message,
                 "target": target_record,
                 "event": inbound_event,
+                "automation_dispatch": automation_dispatch,
                 "matched": False,
                 "results": [],
             },
@@ -1550,11 +1807,13 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
 
         if mode == "draft_only":
             pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text, draft_only=True)
+            await dispatch_automation_event("pending_action.created", {"pending_action": pending, "source": "openclaw_autopilot", "rule": rule})
             results.append({"rule_id": rule.get("id"), "mode": mode, "status": "draft_pending", "pending_action": pending})
             continue
 
         if mode == "ask_before_send":
             pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text)
+            await dispatch_automation_event("pending_action.created", {"pending_action": pending, "source": "openclaw_autopilot", "rule": rule})
             results.append({"rule_id": rule.get("id"), "mode": mode, "status": "confirmation_required", "pending_action": pending})
             continue
 
@@ -1565,6 +1824,7 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
             )
             if first_reply_needs_confirmation:
                 pending = _create_pending_autopilot_reply(rule, incoming_message, reply_text)
+                await dispatch_automation_event("pending_action.created", {"pending_action": pending, "source": "openclaw_autopilot", "rule": rule})
                 results.append({"rule_id": rule.get("id"), "mode": mode, "status": "first_reply_confirmation_required", "pending_action": pending})
                 continue
 
@@ -1589,6 +1849,7 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
             "stored_message": stored_message,
             "target": target_record,
             "event": inbound_event,
+            "automation_dispatch": automation_dispatch,
             "rules": matches,
             "matched": True,
             "pending_action_id": first_pending.get("id") if first_pending else None,
@@ -1625,7 +1886,14 @@ async def api_openclaw_autopilot_rules():
 
 @app.post("/api/openclaw/autopilot/rules")
 async def api_openclaw_autopilot_rules_create(data: dict = Body(default={})):
-    return _create_openclaw_autopilot_rule_from_payload(data)
+    result = _create_openclaw_autopilot_rule_from_payload(data)
+    pending = result.get("raw") if isinstance(result, dict) else None
+    if isinstance(pending, dict) and pending.get("id"):
+        await dispatch_automation_event(
+            "pending_action.created",
+            {"pending_action": pending, "source": "api_openclaw_autopilot_rules_create"},
+        )
+    return result
 
 @app.post("/api/openclaw/autopilot/rules/{rule_id}/enable")
 async def api_openclaw_autopilot_rule_enable(rule_id: str):
@@ -1663,6 +1931,8 @@ async def connect(sid, environ):
     async def on_auth_status(is_auth):
         print(f"[SERVER] Auth status change: {is_auth}")
         await sio.emit('auth_status', {'authenticated': is_auth})
+        if is_auth:
+            await dispatch_automation_event("camera.real_person_verified", {"source": "face_auth"})
 
     # Callback for Auth Camera Frames
     async def on_auth_frame(frame_b64):
@@ -1875,6 +2145,34 @@ async def start_audio(sid, data=None):
         audio_loop = None # Ensure we can try again
 
 
+async def _maybe_dispatch_printer_finished(status_data):
+    status_data = status_data or {}
+    printer_name = str(status_data.get("printer") or status_data.get("name") or status_data.get("host") or "").strip()
+    if not printer_name:
+        return
+
+    state = str(status_data.get("state") or "").strip().lower()
+    try:
+        progress = float(status_data.get("progress_percent") or 0)
+    except Exception:
+        progress = 0.0
+    filename = str(status_data.get("filename") or "unknown").strip()
+    finished = state in {"completed", "complete", "finished", "done"} or progress >= 100
+    key_prefix = f"{printer_name}|"
+    key = f"{key_prefix}{filename}"
+
+    if not finished:
+        for existing in list(printer_finished_events):
+            if existing.startswith(key_prefix):
+                printer_finished_events.discard(existing)
+        return
+
+    if key in printer_finished_events:
+        return
+    printer_finished_events.add(key)
+    await dispatch_automation_event("printer.finished", {"printer": printer_name, "status": status_data})
+
+
 async def monitor_printers_loop():
     """Background task to query printer status periodically."""
     print("[SERVER] Starting Printer Monitor Loop")
@@ -1883,6 +2181,7 @@ async def monitor_printers_loop():
             if simulation_manager.is_printer_enabled():
                 for status_data in printer_simulator.get_all_printer_states():
                     await sio.emit('print_status_update', status_data)
+                    await _maybe_dispatch_printer_finished(status_data)
                 await emit_simulation_snapshot()
                 await asyncio.sleep(2)
                 continue
@@ -1904,7 +2203,9 @@ async def monitor_printers_loop():
                         pass # Ignore errors for now
                     elif res:
                         # res is PrintStatus object
-                        await sio.emit('print_status_update', res.to_dict())
+                        status_data = res.to_dict()
+                        await sio.emit('print_status_update', status_data)
+                        await _maybe_dispatch_printer_finished(status_data)
                         
         except asyncio.CancelledError:
             print("[SERVER] Printer Monitor Cancelled")
@@ -2647,6 +2948,10 @@ async def control_kasa(sid, data):
             })
             devices = kasa_agent.get_all_states()
             await sio.emit('kasa_devices', devices)
+            await dispatch_automation_event(
+                "kasa.device_changed",
+                {"ip": ip, "action": action, "value": data.get("value"), "devices": devices},
+            )
             if simulation_manager.is_kasa_enabled():
                 await emit_simulation_snapshot(kasa_simulator.last_operation_message)
   

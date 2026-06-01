@@ -56,12 +56,37 @@ export const getProjects = () => requestJson('/api/projects');
 
 export const getProjectTree = (projectName) => requestJson(`/api/projects/${encodeURIComponent(projectName)}/tree`);
 
+export const getAutomations = () => requestJson('/api/automations');
+
 export const confirmPendingAction = (id) => requestJson(`/api/pending-actions/${encodeURIComponent(id)}/confirm`, {
     method: 'POST',
 });
 
 export const cancelPendingAction = (id) => requestJson(`/api/pending-actions/${encodeURIComponent(id)}/cancel`, {
     method: 'POST',
+});
+
+export const createAutomation = (payload) => requestJson('/api/automations', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+});
+
+export const updateAutomation = (id, payload) => requestJson(`/api/automations/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload || {}),
+});
+
+export const deleteAutomation = (id) => requestJson(`/api/automations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+});
+
+export const runAutomation = (id) => requestJson(`/api/automations/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+});
+
+export const dispatchAutomationEvent = (eventType, payload = {}) => requestJson('/api/automations/events/dispatch', {
+    method: 'POST',
+    body: JSON.stringify({ event_type: eventType, payload }),
 });
 
 export const runOpenClawAction = (action_type, payload = {}) => requestJson('/api/openclaw/action', {

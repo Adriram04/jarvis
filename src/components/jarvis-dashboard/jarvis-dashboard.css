@@ -189,6 +189,28 @@
     margin-top: 8px;
     padding-right: 2px;
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.42) rgba(5, 7, 13, 0.22);
+}
+
+.jarvis-nav::-webkit-scrollbar {
+    width: 7px;
+}
+
+.jarvis-nav::-webkit-scrollbar-track {
+    border-radius: 999px;
+    background: rgba(5, 7, 13, 0.28);
+}
+
+.jarvis-nav::-webkit-scrollbar-thumb {
+    border: 2px solid rgba(5, 7, 13, 0.72);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(0, 229, 255, 0.68), rgba(0, 163, 255, 0.36));
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.24);
+}
+
+.jarvis-nav::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(0, 229, 255, 0.92), rgba(0, 163, 255, 0.58));
 }
 
 .jarvis-nav-item {
@@ -1375,7 +1397,8 @@
 .jarvis-calendar-layout,
 .jarvis-social-layout,
 .jarvis-chat-layout,
-.jarvis-projects-layout {
+.jarvis-projects-layout,
+.jarvis-automations-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
     gap: 12px;
@@ -1389,6 +1412,8 @@
 .jarvis-vision-guide,
 .jarvis-project-list,
 .jarvis-project-detail,
+.jarvis-automation-list,
+.jarvis-automation-form,
 .jarvis-system-log {
     padding: 16px;
 }
@@ -1488,6 +1513,181 @@
     display: grid;
     gap: 6px;
     margin-top: 6px;
+}
+
+.jarvis-automations-layout {
+    grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+    align-items: start;
+}
+
+.jarvis-automation-list,
+.jarvis-automation-form {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+}
+
+.jarvis-automation-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid rgba(0, 229, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.46);
+}
+
+.jarvis-automation-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.jarvis-automation-card-head strong,
+.jarvis-automation-form label {
+    color: var(--jarvis-text);
+    font-size: 13px;
+}
+
+.jarvis-automation-card-head span,
+.jarvis-automation-meta,
+.jarvis-automation-steps,
+.jarvis-automation-details {
+    color: var(--jarvis-muted);
+    font-size: 12px;
+}
+
+.jarvis-automation-state-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.jarvis-automation-state-row span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 24px;
+    padding: 0 8px;
+    color: var(--jarvis-muted);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 7px;
+    background: rgba(5, 7, 13, 0.38);
+    font-size: 11px;
+}
+
+.jarvis-automation-state-row .is-good {
+    color: #9FFFD6;
+    border-color: rgba(0, 255, 147, 0.22);
+}
+
+.jarvis-automation-state-row .is-running {
+    color: #BEEBFF;
+    border-color: rgba(0, 229, 255, 0.26);
+    background: rgba(0, 163, 255, 0.1);
+}
+
+.jarvis-automation-card button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 0 9px;
+    color: var(--jarvis-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-radius: 7px;
+    background: rgba(0, 163, 255, 0.08);
+}
+
+.jarvis-automation-meta,
+.jarvis-automation-steps,
+.jarvis-automation-form {
+    display: grid;
+    gap: 8px;
+}
+
+.jarvis-automation-meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.jarvis-automation-summary,
+.jarvis-automation-error {
+    overflow: hidden;
+    padding: 8px 10px;
+    border: 1px solid rgba(0, 229, 255, 0.12);
+    border-radius: 8px;
+    background: rgba(0, 163, 255, 0.06);
+    color: #BEEBFF;
+    font-size: 12px;
+    text-overflow: ellipsis;
+}
+
+.jarvis-automation-error {
+    color: #FCA5A5;
+    border-color: rgba(248, 113, 113, 0.22);
+    background: rgba(248, 113, 113, 0.08);
+}
+
+.jarvis-automation-details summary {
+    cursor: pointer;
+    color: var(--jarvis-cyan);
+}
+
+.jarvis-automation-details pre {
+    max-height: 220px;
+    overflow: auto;
+    margin: 8px 0 0;
+    padding: 10px;
+    color: #BEEBFF;
+    border: 1px solid rgba(0, 229, 255, 0.12);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.28);
+    font-size: 11px;
+    white-space: pre-wrap;
+}
+
+.jarvis-automation-form label {
+    display: grid;
+    gap: 6px;
+}
+
+.jarvis-automation-form input,
+.jarvis-automation-form select,
+.jarvis-automation-form textarea {
+    width: 100%;
+    min-width: 0;
+    color: var(--jarvis-text);
+    border: 1px solid rgba(0, 229, 255, 0.16);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.62);
+    outline: none;
+    padding: 10px;
+}
+
+.jarvis-automation-form textarea {
+    min-height: 220px;
+    resize: vertical;
+    font-family: "Share Tech Mono", monospace;
+    font-size: 12px;
+}
+
+.jarvis-automation-form-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.jarvis-automation-check {
+    display: flex !important;
+    grid-template-columns: none;
+    align-items: center;
+    gap: 8px;
+}
+
+.jarvis-automation-check input {
+    width: auto;
 }
 
 .jarvis-calendar-title {

@@ -18,8 +18,12 @@ import LinkedInPostModal from './components/jarvis-dashboard/LinkedInPostModal';
 import {
     cancelPendingAction,
     confirmPendingAction,
+    createAutomation,
     createCalendarEvent,
+    deleteAutomation,
+    dispatchAutomationEvent,
     extractCalendarItems,
+    getAutomations,
     getBackendStatus,
     getOpenClawEvents,
     getOpenClawStatus,
@@ -32,6 +36,8 @@ import {
     normalizePendingActions,
     prepareLinkedInPost,
     publishLinkedInPost,
+    runAutomation,
+    updateAutomation,
 } from './services/jarvisDashboardApi';
 
 
@@ -113,6 +119,7 @@ function App() {
     const [projectTree, setProjectTree] = useState(null);
     const [projectTreeLoading, setProjectTreeLoading] = useState(false);
     const [projectTreeError, setProjectTreeError] = useState(null);
+    const [automations, setAutomations] = useState([]);
 
 
     // RESTORED STATE
@@ -333,6 +340,22 @@ function App() {
         return response;
     }, [setDashboardSectionError, setDashboardSectionLoading]);
 
+    const refreshAutomations = useCallback(async () => {
+        setDashboardSectionLoading('automations', true);
+        const response = await getAutomations();
+        if (response.ok && response.success) {
+            const body = response.data || {};
+            const items = body.automations || body.data?.automations || [];
+            setAutomations(Array.isArray(items) ? items : []);
+            setDashboardSectionError('automations', null);
+        } else {
+            setAutomations([]);
+            setDashboardSectionError('automations', responseError(response, 'Automatizaciones no disponibles'));
+        }
+        setDashboardSectionLoading('automations', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
     const loadProjectTree = useCallback(async (projectName) => {
         const name = String(projectName || '').trim();
         if (!name) {
@@ -423,6 +446,7 @@ function App() {
         refreshOpenClawEvents();
         refreshIntegrationStatuses();
         refreshProjects();
+        refreshAutomations();
 
         const backendTimer = setInterval(() => {
             refreshBackendStatus();
@@ -433,6 +457,7 @@ function App() {
         const activityTimer = setInterval(refreshOpenClawEvents, 12000);
         const integrationsTimer = setInterval(refreshIntegrationStatuses, 60000);
         const projectsTimer = setInterval(refreshProjects, 30000);
+        const automationsTimer = setInterval(refreshAutomations, 30000);
 
         return () => {
             clearInterval(backendTimer);
@@ -441,8 +466,10 @@ function App() {
             clearInterval(activityTimer);
             clearInterval(integrationsTimer);
             clearInterval(projectsTimer);
+            clearInterval(automationsTimer);
         };
     }, [
+        refreshAutomations,
         refreshBackendStatus,
         refreshCalendarEvents,
         refreshIntegrationStatuses,
@@ -1915,6 +1942,45 @@ function App() {
         return response;
     };
 
+    const handleCreateAutomation = async (payload) => {
+        const response = await createAutomation(payload);
+        await refreshAutomations();
+        return response;
+    };
+
+    const handleUpdateAutomation = async (id, payload) => {
+        const response = await updateAutomation(id, payload);
+        await refreshAutomations();
+        return response;
+    };
+
+    const handleDeleteAutomation = async (id) => {
+        const response = await deleteAutomation(id);
+        await refreshAutomations();
+        return response;
+    };
+
+    const handleRunAutomation = async (id) => {
+        const response = await runAutomation(id);
+        await Promise.all([
+            refreshAutomations(),
+            refreshPendingActions(),
+            refreshOpenClawEvents(),
+            refreshCalendarEvents(),
+        ]);
+        return response;
+    };
+
+    const handleDispatchAutomationEvent = async (eventType, payload = {}) => {
+        const response = await dispatchAutomationEvent(eventType, payload);
+        await Promise.all([
+            refreshAutomations(),
+            refreshPendingActions(),
+            refreshOpenClawEvents(),
+        ]);
+        return response;
+    };
+
     const statusValue = (enabled, yes, no) => enabled ? yes : no;
     const openClawOnline = Boolean(openClawStatus?.success);
     const backendOnline = Boolean(backendStatus?.ok);
@@ -2089,6 +2155,9 @@ function App() {
         errors: dashboardError,
         runtime: {
             activePrintStatus,
+            automations,
+            automationsError: dashboardError.automations,
+            automationsLoading: Boolean(dashboardLoading.automations),
             backendStatus,
             browserData,
             currentProject,
@@ -2152,9 +2221,15 @@ function App() {
                 onRefreshActivity={refreshOpenClawEvents}
                 onRefreshIntegrations={refreshIntegrationStatuses}
                 onRefreshProjects={refreshProjects}
+                onRefreshAutomations={refreshAutomations}
                 onLoadProjectTree={loadProjectTree}
                 onConfirmPending={handleConfirmDashboardPending}
                 onCancelPending={handleCancelDashboardPending}
+                onCreateAutomation={handleCreateAutomation}
+                onUpdateAutomation={handleUpdateAutomation}
+                onDeleteAutomation={handleDeleteAutomation}
+                onRunAutomation={handleRunAutomation}
+                onDispatchAutomationEvent={handleDispatchAutomationEvent}
                 onPrepareLinkedInPost={handlePrepareLinkedInPost}
                 onPublishLinkedInPost={handlePublishLinkedInPost}
                 onDiscoverKasa={discoverKasaDevices}

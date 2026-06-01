@@ -6,7 +6,19 @@ from pathlib import Path
 from threading import Lock
 
 
-ALLOWED_EVENT_TYPES = {"inbound", "outbound", "error", "status", "rule_match", "dry_run"}
+ALLOWED_EVENT_TYPES = {
+    "inbound",
+    "outbound",
+    "error",
+    "status",
+    "rule_match",
+    "dry_run",
+    "automation.started",
+    "automation.completed",
+    "automation.failed",
+    "automation.waiting_for_confirmation",
+    "automation.skipped_already_running",
+}
 
 
 def _now_iso():

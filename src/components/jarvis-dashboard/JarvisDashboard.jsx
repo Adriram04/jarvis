@@ -8,6 +8,7 @@ import RecentActivity from './RecentActivity';
 import Sidebar from './Sidebar';
 import TasksPanel from './TasksPanel';
 import ActionsModule from './modules/ActionsModule';
+import AutomationsModule from './modules/AutomationsModule';
 import Cad3DModule from './modules/Cad3DModule';
 import CalendarModule from './modules/CalendarModule';
 import ChatModule from './modules/ChatModule';
@@ -25,6 +26,7 @@ const moduleTitles = {
     chat: ['Chat', 'Conversación viva con Jarvis'],
     calendar: ['Agenda', 'Google Calendar real'],
     actions: ['Acciones', 'Confirmaciones pendientes'],
+    automations: ['Automatizaciones', 'Procesos y workflows'],
     social: ['Social', 'LinkedIn y WhatsApp'],
     projects: ['Proyectos', 'Workspace y archivos creados'],
     cad3d: ['CAD / 3D', 'Diseño, slicing e impresión'],
@@ -71,6 +73,12 @@ const JarvisDashboard = ({
     onRunWebAgent,
     onRefreshProjects,
     onLoadProjectTree,
+    onRefreshAutomations,
+    onCreateAutomation,
+    onUpdateAutomation,
+    onDeleteAutomation,
+    onRunAutomation,
+    onDispatchAutomationEvent,
 }) => {
     const timeLabel = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     const dateLabel = currentTime.toLocaleDateString('es-ES', {
@@ -136,7 +144,13 @@ const JarvisDashboard = ({
         onRefreshPending,
         onRunWebAgent,
         onRefreshProjects,
+        onRefreshAutomations,
         onLoadProjectTree,
+        onCreateAutomation,
+        onUpdateAutomation,
+        onDeleteAutomation,
+        onRunAutomation,
+        onDispatchAutomationEvent,
         onToggleListening,
         setInputValue,
     };
@@ -147,6 +161,7 @@ const JarvisDashboard = ({
         chat: <ChatModule {...moduleProps} />,
         calendar: <CalendarModule {...moduleProps} />,
         actions: <ActionsModule {...moduleProps} />,
+        automations: <AutomationsModule {...moduleProps} />,
         social: <SocialModule {...moduleProps} />,
         projects: <ProjectsModule {...moduleProps} />,
         cad3d: <Cad3DModule {...moduleProps} />,
@@ -205,6 +220,20 @@ const JarvisDashboard = ({
                     <TasksPanel actions={pendingActions} onAddTask={() => onQuickAction('new-task')} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
                     <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
                 </>
+            );
+        }
+
+        if (activeModule === 'automations') {
+            const automations = runtime.automations || [];
+            return (
+                <section className="jarvis-panel jarvis-list-panel">
+                    <div className="jarvis-panel-header"><h2>Automatizaciones</h2></div>
+                    <div className="jarvis-context-metric"><span>Total</span><strong>{automations.length}</strong></div>
+                    <div className="jarvis-context-metric"><span>Activas</span><strong>{automations.filter(item => item.enabled).length}</strong></div>
+                    <div className="jarvis-empty-state compact">
+                        {automations[0]?.next_run_at ? `Proxima: ${automations[0].next_run_at}` : 'Sin proximas ejecuciones.'}
+                    </div>
+                </section>
             );
         }
 
