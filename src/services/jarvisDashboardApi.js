@@ -94,9 +94,16 @@ export const runOpenClawAction = (action_type, payload = {}) => requestJson('/ap
     body: JSON.stringify({ action_type, payload }),
 });
 
-export const listCalendarEvents = (maxResults = 20) => runOpenClawAction('list_calendar_events', {
-    max_results: maxResults,
-});
+export const listCalendarEvents = (options = 20) => {
+    const config = typeof options === 'number' ? { max_results: options } : {
+        max_results: options?.maxResults || options?.max_results || 20,
+    };
+    const timeMin = options?.timeMin || options?.time_min || options?.start;
+    const timeMax = options?.timeMax || options?.time_max || options?.end;
+    if (timeMin) config.time_min = timeMin;
+    if (timeMax) config.time_max = timeMax;
+    return runOpenClawAction('list_calendar_events', config);
+};
 
 export const createCalendarEvent = (payload) => runOpenClawAction('create_calendar_event', payload);
 
@@ -114,6 +121,51 @@ export const publishLinkedInPost = (content) => runOpenClawAction('publish_socia
 const unwrapData = (response) => response?.data ?? response?.raw ?? response;
 
 const firstArray = (...values) => values.find(Array.isArray) || [];
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const padDatePart = (value) => String(value).padStart(2, '0');
+
+export const isCalendarDateOnly = (value) => DATE_ONLY_RE.test(String(value || '').trim());
+
+export const getCalendarDateKey = (value) => {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+        return [
+            value.getFullYear(),
+            padDatePart(value.getMonth() + 1),
+            padDatePart(value.getDate()),
+        ].join('-');
+    }
+    const text = String(value || '').trim();
+    if (!text) return '';
+    if (isCalendarDateOnly(text)) return text;
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) return '';
+    return [
+        date.getFullYear(),
+        padDatePart(date.getMonth() + 1),
+        padDatePart(date.getDate()),
+    ].join('-');
+};
+
+export const parseCalendarDate = (value) => {
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? null : value;
+    }
+    const text = String(value || '').trim();
+    if (!text) return null;
+    if (isCalendarDateOnly(text)) {
+        const [year, month, day] = text.split('-').map(Number);
+        return new Date(year, month - 1, day);
+    }
+    const date = new Date(text);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+export const getCalendarSortValue = (event) => {
+    const date = parseCalendarDate(event?.start);
+    return date ? date.getTime() : Number.MAX_SAFE_INTEGER;
+};
 
 export const extractCalendarItems = (response) => {
     const body = unwrapData(response);
@@ -140,8 +192,9 @@ export const extractCalendarItems = (response) => {
 export const normalizeCalendarEvent = (event, index = 0) => {
     const startValue = event?.start?.dateTime || event?.start?.date || event?.start_time || event?.start;
     const endValue = event?.end?.dateTime || event?.end?.date || event?.end_time || event?.end;
-    const startDate = startValue ? new Date(startValue) : null;
-    const endDate = endValue ? new Date(endValue) : null;
+    const startDate = parseCalendarDate(startValue);
+    const endDate = parseCalendarDate(endValue);
+    const allDay = isCalendarDateOnly(startValue) || Boolean(event?.allDay || event?.all_day);
     const validStart = startDate && !Number.isNaN(startDate.getTime());
     const validEnd = endDate && !Number.isNaN(endDate.getTime());
 
@@ -150,8 +203,11 @@ export const normalizeCalendarEvent = (event, index = 0) => {
         summary: event?.summary || event?.title || 'Sin título',
         start: startValue || null,
         end: endValue || null,
-        startTime: validStart ? startDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : 'Todo el día',
-        endTime: validEnd ? endDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
+        startDateKey: getCalendarDateKey(startValue),
+        endDateKey: getCalendarDateKey(endValue),
+        allDay,
+        startTime: allDay ? 'Todo el dia' : (validStart ? startDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : 'Todo el dia'),
+        endTime: allDay ? '' : (validEnd ? endDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : ''),
         location: event?.location || '',
         description: event?.description || '',
         htmlLink: event?.htmlLink || event?.link || '',

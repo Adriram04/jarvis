@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from copy import deepcopy
+from datetime import datetime, timedelta
 
 
 INTERNAL_OPENCLAW_INSTRUCTION = (
@@ -156,8 +157,57 @@ class OpenClawBridge:
                 payload["title"] = payload.get("summary")
             if payload.get("timeZone") and not payload.get("time_zone"):
                 payload["time_zone"] = payload.get("timeZone")
+            if payload.get("allDay") is not None and payload.get("all_day") is None:
+                payload["all_day"] = self._truthy(payload.get("allDay"))
+
+            start = payload.get("start") or payload.get("start_time") or payload.get("startTime")
+            end = payload.get("end") or payload.get("end_time") or payload.get("endTime")
+            start_date = self._date_only(start)
+            end_date = self._date_only(end)
+            if action_type in {"create_calendar_event", "update_calendar_event"} and start_date:
+                should_use_all_day = self._truthy(payload.get("all_day")) or self._is_date_only_value(start)
+                if should_use_all_day:
+                    payload["all_day"] = True
+                    payload["allDay"] = True
+                    payload["start"] = start_date
+                    payload["end"] = end_date or self._next_date(start_date)
 
         return payload
+
+    def _truthy(self, value):
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "si", "sí", "on"}
+
+    def _is_date_only_value(self, value):
+        return isinstance(value, str) and bool(self._date_only(value)) and "t" not in value.lower()
+
+    def _date_only(self, value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            value = (
+                value.get("date")
+                or value.get("dateTime")
+                or value.get("date_time")
+                or value.get("datetime")
+                or value.get("value")
+            )
+        text = str(value or "").strip()
+        if not text:
+            return None
+        candidate = text.split("T", 1)[0].strip()
+        try:
+            datetime.strptime(candidate, "%Y-%m-%d")
+            return candidate
+        except Exception:
+            return None
+
+    def _next_date(self, value):
+        try:
+            return (datetime.strptime(str(value), "%Y-%m-%d") + timedelta(days=1)).date().isoformat()
+        except Exception:
+            return value
 
     async def execute_autopilot_reply(self, rule, incoming_message):
         incoming_message = incoming_message or {}

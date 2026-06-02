@@ -11,7 +11,7 @@ function clean(value) {
 }
 
 function bool(value) {
-  return value === true || ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+  return value === true || ["1", "true", "yes", "si", "on"].includes(clean(value).toLowerCase());
 }
 
 function readConfig(api) {
@@ -114,16 +114,39 @@ function googleEventFromPayload(payload) {
   if (!title) throw new Error("Falta el titulo del evento.");
   if (!start) throw new Error("Falta la fecha/hora de inicio del evento.");
 
-  const event = {
-    summary: title,
-    start: { dateTime: start, timeZone },
-    end: { dateTime: end || start, timeZone },
-  };
+  const allDay = bool(payload.all_day || payload.allDay);
+  const startDate = dateOnly(start);
+  const endDate = dateOnly(end);
+  const event = allDay && startDate
+    ? {
+        summary: title,
+        start: { date: startDate },
+        end: { date: endDate || addDays(startDate, 1) },
+      }
+    : {
+        summary: title,
+        start: { dateTime: start, timeZone },
+        end: { dateTime: end || start, timeZone },
+      };
   const description = clean(payload.description || payload.details || payload.notes || payload.natural_language);
   const location = clean(payload.location);
   if (description) event.description = description;
   if (location) event.location = location;
   return event;
+}
+
+function dateOnly(value) {
+  const text = clean(value);
+  if (!text) return "";
+  const candidate = text.split("T")[0];
+  return /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : "";
+}
+
+function addDays(value, days) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 async function createGoogleCalendarEvent(actionType, payload, config) {

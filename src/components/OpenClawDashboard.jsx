@@ -139,7 +139,7 @@ const OpenClawDashboard = ({ position, onClose, onMouseDown, zIndex = 45 }) => {
 
     useEffect(() => {
         loadDashboard(true);
-        const timer = setInterval(() => loadDashboard(true), 8000);
+        const timer = setInterval(() => loadDashboard(true), 30000);
         return () => clearInterval(timer);
     }, [loadDashboard]);
 

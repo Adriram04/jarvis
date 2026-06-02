@@ -24,6 +24,7 @@ import os
 import json
 import time
 import unicodedata
+import re
 import ctypes
 import subprocess
 from datetime import datetime
@@ -140,10 +141,21 @@ TEXT_CANCELLATION_PHRASES = {
 def _normalize_text_for_match(text):
     normalized = unicodedata.normalize("NFKD", text or "")
     without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    return without_accents.lower().strip(" .!?¡¿")
+    cleaned = re.sub(r"[^a-zA-Z0-9+]+", " ", without_accents.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 def _is_text_confirmation(text):
-    return _normalize_text_for_match(text) in {_normalize_text_for_match(item) for item in TEXT_CONFIRMATION_PHRASES}
+    normalized = _normalize_text_for_match(text)
+    confirmations = {_normalize_text_for_match(item) for item in TEXT_CONFIRMATION_PHRASES}
+    if normalized in confirmations:
+        return True
+    return normalized in {
+        "si confirmo",
+        "si lo confirmo",
+        "si confirmalo",
+        "si adelante",
+        "si dale",
+    }
 
 def _is_text_cancellation(text):
     return _normalize_text_for_match(text) in {_normalize_text_for_match(item) for item in TEXT_CANCELLATION_PHRASES}
@@ -1272,15 +1284,11 @@ async def _notify_pending_action_resolution(result, source="panel", room=None):
                 input=(
                     "El usuario ha confirmado o resuelto una accion pendiente "
                     f"desde {source}. La accion ya esta procesada. "
-                    f"Di verbalmente al usuario, en una sola frase breve, este resultado: {message}. "
-                    "No pidas mas confirmacion para esta accion."
+                    f"Resultado: {message}. "
+                    "Actualiza solo tu contexto interno. No respondas ni repitas este resultado."
                 ),
-                end_of_turn=True,
+                end_of_turn=False,
             )
-            await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=room)
-            if audio_loop and getattr(audio_loop, "project_manager", None):
-                audio_loop.project_manager.log_chat("JARVIS", message)
-            return
         except Exception as exc:
             print(f"[SERVER] Could not notify live Jarvis session about pending action resolution: {exc}")
 
@@ -2177,18 +2185,22 @@ async def monitor_printers_loop():
     """Background task to query printer status periodically."""
     print("[SERVER] Starting Printer Monitor Loop")
     while audio_loop and audio_loop.printer_agent:
+        next_sleep = 15
         try:
             if simulation_manager.is_printer_enabled():
+                has_active_print = False
                 for status_data in printer_simulator.get_all_printer_states():
                     await sio.emit('print_status_update', status_data)
                     await _maybe_dispatch_printer_finished(status_data)
+                    state = str(status_data.get("state") or "").lower()
+                    has_active_print = has_active_print or any(token in state for token in ("print", "paus", "heat"))
                 await emit_simulation_snapshot()
-                await asyncio.sleep(2)
+                await asyncio.sleep(5 if has_active_print else 15)
                 continue
 
             agent = audio_loop.printer_agent
             if not agent.printers:
-                await asyncio.sleep(5)
+                await asyncio.sleep(next_sleep)
                 continue
                 
             tasks = []
@@ -2198,6 +2210,7 @@ async def monitor_printers_loop():
             
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
+                has_active_print = False
                 for res in results:
                     if isinstance(res, Exception):
                         pass # Ignore errors for now
@@ -2206,6 +2219,9 @@ async def monitor_printers_loop():
                         status_data = res.to_dict()
                         await sio.emit('print_status_update', status_data)
                         await _maybe_dispatch_printer_finished(status_data)
+                        state = str(status_data.get("state") or "").lower()
+                        has_active_print = has_active_print or any(token in state for token in ("print", "paus", "heat"))
+                next_sleep = 5 if has_active_print else 15
                         
         except asyncio.CancelledError:
             print("[SERVER] Printer Monitor Cancelled")
@@ -2213,7 +2229,7 @@ async def monitor_printers_loop():
         except Exception as e:
             print(f"[SERVER] Monitor Loop Error: {e}")
             
-        await asyncio.sleep(2) # Update every 2 seconds for responsiveness
+        await asyncio.sleep(next_sleep)
 
 @sio.event
 async def stop_audio(sid):

@@ -7,7 +7,7 @@ const AgendaPanel = ({ events = [], dateLabel, onViewCalendar, onRefresh, loadin
             <div className="jarvis-panel-header">
                 <h2>Agenda de hoy</h2>
                 <div className="jarvis-panel-header-actions">
-                    <button type="button" onClick={onRefresh} title="Actualizar agenda">
+                    <button type="button" onClick={() => onRefresh()} title="Actualizar agenda">
                         <RefreshCw size={14} /> Actualizar
                     </button>
                     <button type="button" onClick={onViewCalendar}>Crear evento</button>

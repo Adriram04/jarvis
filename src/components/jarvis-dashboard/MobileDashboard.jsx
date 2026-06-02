@@ -1,6 +1,7 @@
 import React from 'react';
 import { CalendarDays, CheckSquare, Home, Menu, MessageCircle, Mic, MoreHorizontal } from 'lucide-react';
 import JarvisCore from './JarvisCore';
+import { getCalendarDateKey } from '../../services/jarvisDashboardApi';
 
 const MobileDashboard = ({
     currentTime,
@@ -11,7 +12,9 @@ const MobileDashboard = ({
     tasks = [],
     integrations = [],
 }) => {
-    const nextEvent = agenda[0];
+    const todayKey = getCalendarDateKey(currentTime);
+    const todayAgenda = agenda.filter(event => (event.startDateKey || getCalendarDateKey(event.start)) === todayKey);
+    const nextEvent = todayAgenda[0] || agenda[0];
     const connectedIntegrations = integrations.filter((item) => item.state === 'connected').length;
     const dateLabel = currentTime.toLocaleDateString('es-ES', {
         day: 'numeric',

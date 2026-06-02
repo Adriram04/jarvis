@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { Box, Printer } from 'lucide-react';
+import { formatPrinterState } from '../../../utils/printerStatus';
 
 const Cad3DModule = ({ context, actions }) => {
     const [prompt, setPrompt] = useState('');
     const { activePrintStatus, printerCount, showCadWindow, showPrinterWindow, slicingStatus } = context;
+    const printStateLabel = activePrintStatus?.state ? formatPrinterState(activePrintStatus.state) : null;
 
     const preparePrompt = () => {
         actions.setInputValue(`Genera un modelo 3D de ${prompt}`.trim());
@@ -37,7 +39,7 @@ const Cad3DModule = ({ context, actions }) => {
                     <Printer size={22} />
                     <span>Impresión 3D</span>
                     <strong>{printerCount > 0 ? `${printerCount} impresora(s)` : 'Sin impresoras detectadas'}</strong>
-                    <p>{activePrintStatus?.state || slicingStatus?.message || 'Slicing, estado y control de impresión.'}</p>
+                    <p>{printStateLabel || slicingStatus?.message || 'Slicing, estado y control de impresión.'}</p>
                     {slicingStatus?.active && <div className="jarvis-meter-line"><span style={{ width: `${slicingStatus.percent || 0}%` }} /></div>}
                     <button type="button" onClick={() => actions.onQuickAction('toggle-printer')}>{showPrinterWindow ? 'Cerrar impresión' : 'Abrir impresión'}</button>
                 </article>

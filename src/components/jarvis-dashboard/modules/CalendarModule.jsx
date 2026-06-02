@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { ExternalLink, Plus, RefreshCw } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Plus, RefreshCw } from 'lucide-react';
+import { getCalendarDateKey } from '../../../services/jarvisDashboardApi';
 
 const sameDay = (value, date) => {
-    if (!value) return false;
-    const eventDate = new Date(value);
-    return !Number.isNaN(eventDate.getTime()) && eventDate.toDateString() === date.toDateString();
+    if (!value || !date) return false;
+    const eventKey = getCalendarDateKey(value?.startDateKey || value?.start || value);
+    const dateKey = getCalendarDateKey(date);
+    return Boolean(eventKey && dateKey && eventKey === dateKey);
 };
 
 const CalendarModule = ({ context, actions }) => {
@@ -23,8 +25,12 @@ const CalendarModule = ({ context, actions }) => {
         return items;
     }, [selectedDate]);
 
-    const selectedEvents = calendarEvents.filter(event => sameDay(event.start, selectedDate));
+    const selectedEvents = calendarEvents.filter(event => sameDay(event, selectedDate));
     const monthLabel = selectedDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    const changeMonth = (delta) => {
+        setSelectedDate((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+    };
+    const goToday = () => setSelectedDate(new Date());
 
     return (
         <section className="jarvis-module">
@@ -34,7 +40,7 @@ const CalendarModule = ({ context, actions }) => {
                     <h2>Agenda</h2>
                 </div>
                 <div className="jarvis-module-actions">
-                    <button type="button" onClick={actions.onRefreshCalendar}><RefreshCw size={14} /> Actualizar</button>
+                    <button type="button" onClick={() => actions.onRefreshCalendar()}><RefreshCw size={14} /> Actualizar</button>
                     <button type="button" onClick={() => actions.onQuickAction('create-event')}><Plus size={14} /> Crear evento</button>
                 </div>
             </div>
@@ -44,13 +50,27 @@ const CalendarModule = ({ context, actions }) => {
 
             <div className="jarvis-calendar-layout">
                 <section className="jarvis-panel jarvis-calendar-board">
-                    <div className="jarvis-calendar-title">{monthLabel}</div>
+                    <div className="jarvis-calendar-heading">
+                        <div className="jarvis-calendar-title">{monthLabel}</div>
+                        <div className="jarvis-calendar-month-controls">
+                            <button type="button" onClick={() => changeMonth(-1)} title="Mes anterior">
+                                <ChevronLeft size={15} />
+                            </button>
+                            <button type="button" onClick={goToday} title="Volver a hoy">
+                                <CalendarDays size={14} />
+                                <span>Hoy</span>
+                            </button>
+                            <button type="button" onClick={() => changeMonth(1)} title="Mes siguiente">
+                                <ChevronRight size={15} />
+                            </button>
+                        </div>
+                    </div>
                     <div className="jarvis-calendar-weekdays">
                         {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(day => <span key={day}>{day}</span>)}
                     </div>
                     <div className="jarvis-calendar-grid">
                         {days.map((day, index) => {
-                            const hasEvents = day && calendarEvents.some(event => sameDay(event.start, day));
+                            const hasEvents = day && calendarEvents.some(event => sameDay(event, day));
                             const active = day && sameDay(day, selectedDate);
                             return (
                                 <button

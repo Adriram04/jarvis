@@ -1,5 +1,6 @@
 import React from 'react';
 import { Activity, Cpu, DatabaseZap } from 'lucide-react';
+import { formatPrinterState } from '../../../utils/printerStatus';
 
 const SystemModule = ({ context, actions }) => {
     const {
@@ -61,7 +62,7 @@ const SystemModule = ({ context, actions }) => {
                     <span>Face Auth {faceAuthEnabled ? 'activo' : 'inactivo'}</span>
                     <span>Impresoras {printerCount}</span>
                     <span>Kasa {kasaDevices.length}</span>
-                    <span>{activePrintStatus?.state || 'Sin impresión activa'}</span>
+                    <span>{activePrintStatus?.state ? formatPrinterState(activePrintStatus.state) : 'Sin impresión activa'}</span>
                 </div>
                 <div className="jarvis-activity-list">
                     {openClawEvents.length === 0 && <div className="jarvis-empty-state">Sin actividad reciente.</div>}

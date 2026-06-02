@@ -403,6 +403,54 @@ def test_calendar_actions_use_productivity_gateway_method_by_default(monkeypatch
     assert result["success"] is True
 
 
+def test_calendar_all_day_date_payload_uses_google_date_range(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["params"] = json.loads(args[args.index("--params") + 1])
+        return {"success": True, "stdout": json.dumps({"success": True, "details": "created"}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    result = asyncio.run(bridge.execute_action("create_calendar_event", {
+        "title": "tfg",
+        "start": "2026-07-02",
+        "end": "2026-07-03",
+        "allDay": True,
+    }))
+
+    payload = seen["params"]["payload"]
+    assert result["success"] is True
+    assert payload["all_day"] is True
+    assert payload["allDay"] is True
+    assert payload["start"] == "2026-07-02"
+    assert payload["end"] == "2026-07-03"
+
+
+def test_calendar_date_only_start_defaults_to_all_day_next_day(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
+    bridge = OpenClawBridge()
+    seen = {}
+
+    async def fake_run_cli(args, timeout):
+        seen["params"] = json.loads(args[args.index("--params") + 1])
+        return {"success": True, "stdout": json.dumps({"success": True, "details": "created"}), "returncode": 0, "command": ["openclaw", *args]}
+
+    monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
+    result = asyncio.run(bridge.execute_action("create_calendar_event", {
+        "title": "Demo",
+        "start": "2026-07-02",
+    }))
+
+    payload = seen["params"]["payload"]
+    assert result["success"] is True
+    assert payload["all_day"] is True
+    assert payload["allDay"] is True
+    assert payload["start"] == "2026-07-02"
+    assert payload["end"] == "2026-07-03"
+
+
 def test_social_actions_report_missing_productivity_method_when_plugin_absent(monkeypatch):
     monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
     monkeypatch.delenv("JARVIS_OPENCLAW_GENERIC_CALL_METHOD", raising=False)

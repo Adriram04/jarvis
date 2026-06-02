@@ -17,6 +17,7 @@ import {
     X,
     Zap,
 } from 'lucide-react';
+import { formatPrinterState } from '../utils/printerStatus';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -89,7 +90,7 @@ const SimulationDashboard = ({ socket, position, onClose, onMouseDown, zIndex = 
 
     useEffect(() => {
         loadSnapshot(true);
-        const timer = setInterval(() => loadSnapshot(true), active ? 1000 : 2000);
+        const timer = setInterval(() => loadSnapshot(true), active ? 10000 : 30000);
         return () => clearInterval(timer);
     }, [active, loadSnapshot]);
 
@@ -278,7 +279,7 @@ const SimulationDashboard = ({ socket, position, onClose, onMouseDown, zIndex = 
                                             <div className="text-[10px] text-white/40 truncate">{status.printer_type} | {status.host}:{status.port}</div>
                                         </div>
                                         <span className={`px-2 py-0.5 rounded border text-[10px] uppercase ${statusTone(status.state)}`}>
-                                            {status.state}
+                                            {formatPrinterState(status.state, 'Inactiva')}
                                         </span>
                                     </div>
 

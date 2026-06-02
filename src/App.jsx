@@ -15,6 +15,7 @@ import OpenClawDashboard from './components/OpenClawDashboard';
 import CalendarEventModal from './components/jarvis-dashboard/CalendarEventModal';
 import JarvisDashboard from './components/jarvis-dashboard/JarvisDashboard';
 import LinkedInPostModal from './components/jarvis-dashboard/LinkedInPostModal';
+import { formatPrinterState, isActivePrinterState, isFinishedOrIdlePrinterState } from './utils/printerStatus';
 import {
     cancelPendingAction,
     confirmPendingAction,
@@ -25,6 +26,7 @@ import {
     extractCalendarItems,
     getAutomations,
     getBackendStatus,
+    getCalendarSortValue,
     getOpenClawEvents,
     getOpenClawStatus,
     getPendingActions,
@@ -44,6 +46,15 @@ import {
 
 const socket = io('http://localhost:8000');
 const { ipcRenderer } = window.require('electron');
+
+const DASHBOARD_POLL_INTERVALS = {
+    backend: 60000,
+    calendar: 300000,
+    pending: 45000,
+    activity: 45000,
+    projects: 120000,
+    automations: 120000,
+};
 
 const mergeStreamingText = (previous = '', next = '') => {
     if (!previous || !next) return `${previous}${next}`;
@@ -279,11 +290,11 @@ function App() {
 
     const refreshCalendarEvents = useCallback(async () => {
         setDashboardSectionLoading('calendar', true);
-        const response = await listCalendarEvents(20);
+        const response = await listCalendarEvents(100);
         if (response.success) {
             const events = extractCalendarItems(response)
                 .map(normalizeCalendarEvent)
-                .sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')));
+                .sort((a, b) => getCalendarSortValue(a) - getCalendarSortValue(b));
             setCalendarEvents(events);
             setDashboardSectionError('calendar', null);
         } else {
@@ -451,20 +462,18 @@ function App() {
         const backendTimer = setInterval(() => {
             refreshBackendStatus();
             refreshOpenClawStatus();
-        }, 30000);
-        const calendarTimer = setInterval(refreshCalendarEvents, 60000);
-        const pendingTimer = setInterval(refreshPendingActions, 12000);
-        const activityTimer = setInterval(refreshOpenClawEvents, 12000);
-        const integrationsTimer = setInterval(refreshIntegrationStatuses, 60000);
-        const projectsTimer = setInterval(refreshProjects, 30000);
-        const automationsTimer = setInterval(refreshAutomations, 30000);
+        }, DASHBOARD_POLL_INTERVALS.backend);
+        const calendarTimer = setInterval(refreshCalendarEvents, DASHBOARD_POLL_INTERVALS.calendar);
+        const pendingTimer = setInterval(refreshPendingActions, DASHBOARD_POLL_INTERVALS.pending);
+        const activityTimer = setInterval(refreshOpenClawEvents, DASHBOARD_POLL_INTERVALS.activity);
+        const projectsTimer = setInterval(refreshProjects, DASHBOARD_POLL_INTERVALS.projects);
+        const automationsTimer = setInterval(refreshAutomations, DASHBOARD_POLL_INTERVALS.automations);
 
         return () => {
             clearInterval(backendTimer);
             clearInterval(calendarTimer);
             clearInterval(pendingTimer);
             clearInterval(activityTimer);
-            clearInterval(integrationsTimer);
             clearInterval(projectsTimer);
             clearInterval(automationsTimer);
         };
@@ -763,22 +772,31 @@ function App() {
             setMessages(prev => {
                 const lastMsg = prev[prev.length - 1];
                 const shouldAppend = data.append !== false;
+                const nextText = String(data.text || '');
+                const lastText = String(lastMsg?.text || '');
+                const normalizeMessage = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
                 // If the last message is from the same sender, append the chunk
                 if (shouldAppend && lastMsg && lastMsg.sender === data.sender) {
+                    if (normalizeMessage(lastText) === normalizeMessage(nextText)) {
+                        return prev;
+                    }
                     // Create a NEW object instead of mutating (prevents React StrictMode duplication)
                     return [
                         ...prev.slice(0, -1),
                         {
                             ...lastMsg,
-                            text: mergeStreamingText(lastMsg.text, data.text)
+                            text: mergeStreamingText(lastMsg.text, nextText)
                         }
                     ];
                 } else {
+                    if (lastMsg && lastMsg.sender === data.sender && normalizeMessage(lastText) === normalizeMessage(nextText)) {
+                        return prev;
+                    }
                     // New message block
                     return [...prev, {
                         sender: data.sender,
-                        text: data.text,
+                        text: nextText,
                         time: new Date().toLocaleTimeString()
                     }];
                 }
@@ -846,14 +864,14 @@ function App() {
         socket.on('print_status_update', (data) => {
             console.log('[PRINT STATUS]', data);
             // Only show in toolbar if actively printing
-            if (data.state && data.state.toLowerCase().includes('print')) {
+            if (isActivePrinterState(data.state)) {
                 setActivePrintStatus({
                     printer: data.printer,
                     progress_percent: data.progress_percent,
                     time_elapsed: data.time_elapsed,
                     state: data.state
                 });
-            } else if (data.state && (data.state.toLowerCase() === 'idle' || data.state.toLowerCase() === 'standby' || data.state.toLowerCase() === 'complete')) {
+            } else if (isFinishedOrIdlePrinterState(data.state)) {
                 // Clear if print finished or idle
                 setActivePrintStatus(null);
             }
@@ -2006,6 +2024,7 @@ function App() {
         cpuInfo.cores ? `${cpuInfo.cores} cores` : null,
     ].filter(Boolean).join(' · ') || 'No disponible';
     const integrationByName = new Map(integrationStatuses.map(item => [item.name, item]));
+    const activePrintStateLabel = activePrintStatus?.state ? formatPrinterState(activePrintStatus.state) : null;
     const connectionNames = [
         ['OpenClaw', 'OpenClaw'],
         ['WhatsApp', 'WhatsApp'],
@@ -2124,7 +2143,7 @@ function App() {
                 id: 'printer',
                 icon: 'printer',
                 title: 'Impresión 3D',
-                state: activePrintStatus?.state || (slicingStatus.active ? `${slicingStatus.percent}% slicing` : (printerCount ? `${printerCount} impresora(s)` : 'Sin impresoras detectadas')),
+                state: activePrintStateLabel || (slicingStatus.active ? `${slicingStatus.percent}% slicing` : (printerCount ? `${printerCount} impresora(s)` : 'Sin impresoras detectadas')),
                 stateTone: printerCount || activePrintStatus || slicingStatus.active ? 'green' : '',
                 description: activePrintStatus?.printer || slicingStatus.message || 'Slicing, estado y control de impresión.',
                 primaryAction: 'toggle-printer',

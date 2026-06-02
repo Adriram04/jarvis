@@ -138,6 +138,22 @@ async def test_text_confirmation_executes_local_pending_action(openclaw_voice_fl
 
 
 @pytest.mark.asyncio
+async def test_text_confirmation_accepts_composite_phrase(openclaw_voice_flow):
+    targets, _, pending, loop, emissions, bridge = openclaw_voice_flow
+    targets.add_target("whatsapp", "user", "Laura", "+34722129717", canonical_target="+34722129717", aliases=["Laura"], allowed=True)
+
+    await server.user_input("sid-1", {"text": "dile a Laura que hola"})
+    action = pending.get_pending_actions()[0]
+    await server.user_input("sid-1", {"text": "si confirmo"})
+
+    executed = pending.get_action(action["id"])
+    assert executed["status"] == "executed"
+    assert bridge.calls[0][0] == "send_message"
+    assert not any(item["input"] == "si confirmo" for item in loop.session.sent)
+    assert any(event == "transcription" and "Mensaje enviado" in data["text"] for event, data, _ in emissions)
+
+
+@pytest.mark.asyncio
 async def test_confirm_tool_cancels_local_pending_action(openclaw_voice_flow):
     targets, _, pending, _, emissions, bridge = openclaw_voice_flow
     targets.add_target("whatsapp", "user", "Laura", "+34722129717", canonical_target="+34722129717", aliases=["Laura"], allowed=True)

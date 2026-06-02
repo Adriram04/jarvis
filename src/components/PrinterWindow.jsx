@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, RefreshCw, Printer, Thermometer, Clock, FileText, CheckCircle, AlertTriangle, ExternalLink } from 'lucide-react';
+import { formatPrinterState } from '../utils/printerStatus';
 
 const { shell } = window.require('electron');
 
@@ -234,7 +235,7 @@ const PrinterWindow = ({
                                         </button>
                                         {printer.status && (
                                             <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/5 ${getStatusColor(printer.status.state)}`}>
-                                                {printer.status.state?.toUpperCase() || "IDLE"}
+                                                {formatPrinterState(printer.status.state, 'Inactiva')}
                                             </div>
                                         )}
                                     </div>

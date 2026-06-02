@@ -1,7 +1,6 @@
 import React from 'react';
 import { Activity, FolderKanban, Maximize2, Minus, X } from 'lucide-react';
 import AgendaPanel from './AgendaPanel';
-import CommandBar from './CommandBar';
 import IntegrationsPanel from './IntegrationsPanel';
 import MobileDashboard from './MobileDashboard';
 import RecentActivity from './RecentActivity';
@@ -19,6 +18,8 @@ import SettingsModule from './modules/SettingsModule';
 import SocialModule from './modules/SocialModule';
 import SystemModule from './modules/SystemModule';
 import WebAgentModule from './modules/WebAgentModule';
+import { getCalendarDateKey } from '../../services/jarvisDashboardApi';
+import { formatPrinterState } from '../../utils/printerStatus';
 import './jarvis-dashboard.css';
 
 const moduleTitles = {
@@ -174,7 +175,9 @@ const JarvisDashboard = ({
     const userMessages = messages.filter(message => String(message.sender || '').toLowerCase().match(/you|user|tu|tú/)).length;
     const jarvisMessages = messages.filter(message => String(message.sender || '').toLowerCase().match(/jarvis|assistant/)).length;
     const latestMessage = messages[messages.length - 1];
-    const nextEvent = agenda[0];
+    const todayKey = getCalendarDateKey(currentTime);
+    const todayAgenda = agenda.filter(event => (event.startDateKey || getCalendarDateKey(event.start)) === todayKey);
+    const homeAgenda = todayAgenda.length ? todayAgenda : agenda.slice(0, 3);
     const projectCount = runtime.projects?.length || 0;
 
     const renderActiveProjectPanel = () => (
@@ -261,7 +264,7 @@ const JarvisDashboard = ({
                 <section className="jarvis-panel jarvis-list-panel">
                     <div className="jarvis-panel-header"><h2>CAD / 3D</h2></div>
                     <div className="jarvis-context-metric"><span>Impresoras</span><strong>{runtime.printerCount || 0}</strong></div>
-                    <div className="jarvis-empty-state compact">{runtime.activePrintStatus?.state || runtime.slicingStatus?.message || 'Sin impresión activa.'}</div>
+                    <div className="jarvis-empty-state compact">{runtime.activePrintStatus?.state ? formatPrinterState(runtime.activePrintStatus.state) : runtime.slicingStatus?.message || 'Sin impresión activa.'}</div>
                 </section>
             );
         }
@@ -302,14 +305,12 @@ const JarvisDashboard = ({
 
         return (
             <>
-                <AgendaPanel events={nextEvent ? [nextEvent] : []} dateLabel={dateLabel} onViewCalendar={() => onQuickAction('create-event')} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />
+                <AgendaPanel events={homeAgenda} dateLabel={dateLabel} onViewCalendar={() => onQuickAction('create-event')} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />
                 <TasksPanel actions={pendingActions} onAddTask={() => onQuickAction('new-task')} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
                 <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
             </>
         );
     };
-
-    const shouldShowGlobalCommand = !['home', 'chat'].includes(activeModule);
 
     return (
         <main className="jarvis-dashboard-root">
@@ -334,16 +335,6 @@ const JarvisDashboard = ({
 
                     {activeModuleView}
 
-                    {shouldShowGlobalCommand && (
-                        <CommandBar
-                            value={inputValue}
-                            onChange={setInputValue}
-                            onSubmit={onCommandSubmit}
-                            onToggleListening={onToggleListening}
-                            isListening={isListening}
-                            isConnected={isConnected}
-                        />
-                    )}
                 </section>
 
                 <aside className="jarvis-right-column">
