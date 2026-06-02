@@ -548,6 +548,58 @@ class TestFileOperations:
         assert "Refusing to delete the active project root" in loop.session.last_message
 
 
+class TestCadIterationFlow:
+    """Test CAD iteration artifact handling."""
+
+    @pytest.mark.asyncio
+    async def test_handle_cad_iteration_saves_returned_timestamped_stl(self, tmp_path):
+        """Iteration should save the real STL path returned by CadAgent."""
+        from jarvis import AudioLoop
+        from project_manager import ProjectManager
+
+        manager = ProjectManager(str(tmp_path))
+        manager.create_project("Demo")
+        manager.switch_project("Demo")
+        cad_dir = manager.get_current_project_path() / "cad"
+        (cad_dir / "current_design.py").write_text(
+            "from build123d import *\nexport_stl(Box(10, 10, 10), 'output.stl')\n",
+            encoding="utf-8",
+        )
+
+        returned_stl = cad_dir / "output_20260602_174944.stl"
+
+        class FakeCadAgent:
+            async def iterate_prototype(self, prompt, output_dir=None):
+                assert Path(output_dir) == cad_dir
+                returned_stl.write_text("solid iterated_cube\nendsolid iterated_cube\n", encoding="utf-8")
+                return {
+                    "format": "stl",
+                    "data": "c29saWQgaXRlcmF0ZWRfY3ViZQ==",
+                    "file_path": str(returned_stl),
+                }
+
+        cad_payloads = []
+        statuses = []
+        loop = object.__new__(AudioLoop)
+        loop.project_manager = manager
+        loop.cad_agent = FakeCadAgent()
+        loop.on_cad_data = cad_payloads.append
+        loop.on_cad_status = statuses.append
+
+        result = await loop.handle_cad_iteration("haz el cubo mas alto")
+
+        assert result is not None
+        assert result["cad_data"]["file_path"] == str(returned_stl)
+        assert returned_stl.exists()
+        saved_path = Path(result["saved_path"])
+        assert saved_path.exists()
+        assert saved_path.parent == cad_dir
+        assert saved_path.name != "output.stl"
+        assert saved_path.read_text(encoding="utf-8") == returned_stl.read_text(encoding="utf-8")
+        assert cad_payloads[0]["file_path"] == str(returned_stl)
+        assert statuses == ["generating"]
+
+
 class TestProjectDeletion:
     """Test ProjectManager project deletion."""
 

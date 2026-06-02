@@ -97,20 +97,27 @@ class ProjectManager:
 
     def save_cad_artifact(self, source_path: str, prompt: str):
         """Copies a generated CAD file to the project's 'cad' folder."""
-        if not os.path.exists(source_path):
-            print(f"[ProjectManager] [ERR] Source file not found: {source_path}")
+        if not source_path:
+            print("[ProjectManager] [ERR] No CAD source file provided.")
+            return None
+
+        source = Path(source_path)
+        if not source.exists():
+            print(f"[ProjectManager] [ERR] Source file not found: {source}")
             return None
 
         # Create a filename based on timestamp and prompt
         timestamp = int(time.time())
         # Brief sanitization of prompt for filename
-        safe_prompt = "".join([c for c in prompt if c.isalnum() or c in (' ', '-', '_')])[:30].strip().replace(" ", "_")
-        filename = f"{timestamp}_{safe_prompt}.stl"
+        safe_prompt = "".join([c for c in prompt if c.isalnum() or c in (' ', '-', '_')])[:30].strip().replace(" ", "_") or "cad"
+        suffix = source.suffix or ".stl"
+        filename = f"{timestamp}_{safe_prompt}{suffix}"
         
         dest_path = self.get_current_project_path() / "cad" / filename
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
-            shutil.copy2(source_path, dest_path)
+            shutil.copy2(source, dest_path)
             print(f"[ProjectManager] Saved CAD artifact to: {dest_path}")
             return str(dest_path)
         except Exception as e:

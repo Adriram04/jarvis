@@ -973,11 +973,7 @@ class AudioLoop:
                 print(f"[JARVIS DEBUG] [SENT] Dispatch complete.")
             
             # Save to Project
-            if 'file_path' in cad_data:
-                self.project_manager.save_cad_artifact(cad_data['file_path'], prompt)
-            else:
-                 # Fallback (legacy support)
-                 self.project_manager.save_cad_artifact("output.stl", prompt)
+            self._save_cad_artifact_from_result(cad_data, prompt)
 
             # Notify the model that the task is done - this triggers speech about completion
             completion_msg = "System Notification: CAD generation is complete! The 3D model is now displayed for the user. Let them know it's ready."
@@ -994,6 +990,48 @@ class AudioLoop:
                 await self.session.send(input="System Notification: CAD generation failed.", end_of_turn=True)
             except Exception:
                 pass
+
+    def _cad_result_file_path(self, cad_data):
+        """Returns the real STL path emitted by CadAgent, when present."""
+        if not isinstance(cad_data, dict):
+            return None
+
+        for key in ("file_path", "stl_path", "output_path"):
+            path = cad_data.get(key)
+            if path:
+                return os.fspath(path)
+
+        return None
+
+    def _save_cad_artifact_from_result(self, cad_data, prompt):
+        source_path = self._cad_result_file_path(cad_data)
+        if not source_path:
+            print("[JARVIS DEBUG] [CAD] CadAgent result did not include a STL file path; skipping project save.")
+            return None
+
+        return self.project_manager.save_cad_artifact(source_path, prompt)
+
+    async def handle_cad_iteration(self, prompt):
+        print(f"[JARVIS DEBUG] [CAD] Background Task Started: handle_cad_iteration('{prompt}')")
+        if self.on_cad_status:
+            self.on_cad_status("generating")
+
+        cad_output_dir = str(self.project_manager.get_current_project_path() / "cad")
+        cad_data = await self.cad_agent.iterate_prototype(prompt, output_dir=cad_output_dir)
+
+        if not cad_data:
+            print(f"[JARVIS DEBUG] [ERR] CadAgent iteration returned None.")
+            return None
+
+        print(f"[JARVIS DEBUG] [OK] CadAgent iteration returned data successfully.")
+
+        if self.on_cad_data:
+            print(f"[JARVIS DEBUG] [SEND] Dispatching iterated CAD data to frontend...")
+            self.on_cad_data(cad_data)
+            print(f"[JARVIS DEBUG] [SENT] Dispatch complete.")
+
+        saved_path = self._save_cad_artifact_from_result(cad_data, f"Iteration: {prompt}")
+        return {"cad_data": cad_data, "saved_path": saved_path}
 
     async def _infer_active_printer_target(self):
         active_states = {"printing", "heating", "paused"}
@@ -2303,32 +2341,12 @@ class AudioLoop:
                                 elif fc.name == "iterate_cad":
                                     prompt = fc.args["prompt"]
                                     print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'iterate_cad' Prompt='{prompt}'")
-                                    
-                                    # Emit status
-                                    if self.on_cad_status:
-                                        self.on_cad_status("generating")
-                                    
-                                    # Get project cad folder path
-                                    cad_output_dir = str(self.project_manager.get_current_project_path() / "cad")
-                                    
-                                    # Call CadAgent to iterate on the design
-                                    cad_data = await self.cad_agent.iterate_prototype(prompt, output_dir=cad_output_dir)
-                                    
-                                    if cad_data:
-                                        print(f"[JARVIS DEBUG] [OK] CadAgent iteration returned data successfully.")
-                                        
-                                        # Dispatch to frontend
-                                        if self.on_cad_data:
-                                            print(f"[JARVIS DEBUG] [SEND] Dispatching iterated CAD data to frontend...")
-                                            self.on_cad_data(cad_data)
-                                            print(f"[JARVIS DEBUG] [SENT] Dispatch complete.")
-                                        
-                                        # Save to Project
-                                        self.project_manager.save_cad_artifact("output.stl", f"Iteration: {prompt}")
-                                        
+
+                                    iteration_result = await self.handle_cad_iteration(prompt)
+
+                                    if iteration_result:
                                         result_str = f"Successfully iterated design: {prompt}. The updated 3D model is now displayed."
                                     else:
-                                        print(f"[JARVIS DEBUG] [ERR] CadAgent iteration returned None.")
                                         result_str = f"Failed to iterate design with prompt: {prompt}"
                                     
                                     function_response = types.FunctionResponse(
