@@ -41,16 +41,16 @@ const ProjectsModule = ({ context, actions }) => {
         }
     }, [currentProject, projects, selectedProject]);
 
-    useEffect(() => {
-        if (selectedProject) {
-            actions.onLoadProjectTree?.(selectedProject);
-        }
-    }, [selectedProject]);
-
     const selectedSummary = useMemo(
         () => projects.find(project => project.name === selectedProject),
         [projects, selectedProject],
     );
+
+    useEffect(() => {
+        if (selectedProject) {
+            actions.onLoadProjectTree?.(selectedProject);
+        }
+    }, [selectedProject, selectedSummary?.updated_at]);
 
     return (
         <section className="jarvis-module">

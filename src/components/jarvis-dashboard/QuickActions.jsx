@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
     Box,
-    CalendarPlus,
     Camera,
     ChevronDown,
     ChevronUp,
@@ -11,14 +10,11 @@ import {
     Linkedin,
     Lightbulb,
     MessageCircle,
-    PlusSquare,
     Printer,
     Webcam,
 } from 'lucide-react';
 
 const actions = [
-    { id: 'new-task', label: 'Nueva tarea', icon: PlusSquare },
-    { id: 'create-event', label: 'Crear evento', icon: CalendarPlus },
     { id: 'linkedin-post', label: 'LinkedIn', icon: Linkedin },
     { id: 'toggle-video', label: 'Cámara', icon: Camera },
     { id: 'toggle-hand', label: 'Gestos', icon: Hand },

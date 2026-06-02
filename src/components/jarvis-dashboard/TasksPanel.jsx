@@ -1,12 +1,11 @@
 import React from 'react';
-import { Check, Plus, X } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 
-const TasksPanel = ({ actions = [], onAddTask, onConfirm, onCancel, loading, error }) => {
+const TasksPanel = ({ actions = [], onConfirm, onCancel, loading, error }) => {
     return (
         <section className="jarvis-panel jarvis-list-panel">
             <div className="jarvis-panel-header">
                 <h2>Acciones pendientes</h2>
-                <button type="button" onClick={onAddTask}>Nueva tarea</button>
             </div>
             {error && <div className="jarvis-soft-error">{error}</div>}
             {loading && <div className="jarvis-empty-state compact">Cargando acciones...</div>}
@@ -30,9 +29,6 @@ const TasksPanel = ({ actions = [], onAddTask, onConfirm, onCancel, loading, err
                     </article>
                 ))}
             </div>
-            <button type="button" className="jarvis-panel-action" onClick={onAddTask}>
-                <Plus size={15} /> Preparar tarea
-            </button>
         </section>
     );
 };

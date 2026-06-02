@@ -1,7 +1,7 @@
 import React from 'react';
 import { CalendarDays, ExternalLink, RefreshCw } from 'lucide-react';
 
-const AgendaPanel = ({ events = [], dateLabel, onViewCalendar, onRefresh, loading, error }) => {
+const AgendaPanel = ({ events = [], dateLabel, onRefresh, loading, error }) => {
     return (
         <section className="jarvis-panel jarvis-list-panel">
             <div className="jarvis-panel-header">
@@ -10,7 +10,6 @@ const AgendaPanel = ({ events = [], dateLabel, onViewCalendar, onRefresh, loadin
                     <button type="button" onClick={() => onRefresh()} title="Actualizar agenda">
                         <RefreshCw size={14} /> Actualizar
                     </button>
-                    <button type="button" onClick={onViewCalendar}>Crear evento</button>
                 </div>
             </div>
             <p className="jarvis-panel-date">{dateLabel}</p>

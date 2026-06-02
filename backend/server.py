@@ -576,13 +576,13 @@ def _project_summary(project_path: Path):
     }
 
 
-def _project_tree(project_path: Path, max_entries: int = 300):
+def _project_tree(project_path: Path, max_entries: int | None = None):
     root = project_path.resolve()
     count = 0
 
     def build(path: Path):
         nonlocal count
-        if count >= max_entries:
+        if max_entries is not None and count >= max_entries:
             return None
         count += 1
 

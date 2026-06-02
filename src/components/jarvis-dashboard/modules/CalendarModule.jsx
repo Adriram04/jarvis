@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Plus, RefreshCw } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from 'lucide-react';
 import { getCalendarDateKey } from '../../../services/jarvisDashboardApi';
 
 const sameDay = (value, date) => {
@@ -41,7 +41,6 @@ const CalendarModule = ({ context, actions }) => {
                 </div>
                 <div className="jarvis-module-actions">
                     <button type="button" onClick={() => actions.onRefreshCalendar()}><RefreshCw size={14} /> Actualizar</button>
-                    <button type="button" onClick={() => actions.onQuickAction('create-event')}><Plus size={14} /> Crear evento</button>
                 </div>
             </div>
 

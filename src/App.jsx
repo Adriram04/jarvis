@@ -830,11 +830,15 @@ function App() {
         });
 
         socket.on('project_update', (data) => {
-            console.log("Project Update:", data.project);
-            setCurrentProject(data.project);
+            const projectName = String(data?.project || '').trim();
+            console.log("Project Update:", projectName);
+            setCurrentProject(projectName);
             setProjectTree(null);
             refreshProjects();
-            addMessage('System', `Switched to project: ${data.project}`);
+            if (projectName) {
+                loadProjectTree(projectName);
+            }
+            addMessage('System', `Switched to project: ${projectName}`);
         });
 
         // Track printer count for toolbar display

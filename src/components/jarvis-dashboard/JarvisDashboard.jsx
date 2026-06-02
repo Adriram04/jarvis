@@ -208,19 +208,19 @@ const JarvisDashboard = ({
                         <div className="jarvis-context-metric"><span>Respuestas Jarvis</span><strong>{jarvisMessages}</strong></div>
                         <div className="jarvis-empty-state compact">{latestMessage?.text || 'Sin mensajes todavía.'}</div>
                     </section>
-                    <TasksPanel actions={pendingActions} onAddTask={() => onQuickAction('new-task')} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
+                    <TasksPanel actions={pendingActions} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
                 </>
             );
         }
 
         if (activeModule === 'calendar') {
-            return <AgendaPanel events={agenda} dateLabel={dateLabel} onViewCalendar={() => onQuickAction('create-event')} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />;
+            return <AgendaPanel events={agenda} dateLabel={dateLabel} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />;
         }
 
         if (activeModule === 'actions') {
             return (
                 <>
-                    <TasksPanel actions={pendingActions} onAddTask={() => onQuickAction('new-task')} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
+                    <TasksPanel actions={pendingActions} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
                     <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
                 </>
             );
@@ -305,8 +305,8 @@ const JarvisDashboard = ({
 
         return (
             <>
-                <AgendaPanel events={homeAgenda} dateLabel={dateLabel} onViewCalendar={() => onQuickAction('create-event')} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />
-                <TasksPanel actions={pendingActions} onAddTask={() => onQuickAction('new-task')} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
+                <AgendaPanel events={homeAgenda} dateLabel={dateLabel} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />
+                <TasksPanel actions={pendingActions} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
                 <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
             </>
         );

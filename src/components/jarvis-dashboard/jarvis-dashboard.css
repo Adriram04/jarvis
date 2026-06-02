@@ -1432,7 +1432,11 @@
 }
 
 .jarvis-project-detail {
-    overflow: hidden;
+    overflow: auto;
+}
+
+.jarvis-project-list {
+    overflow: auto;
 }
 
 .jarvis-project-card {
