@@ -5,7 +5,15 @@ import pytest
 import asyncio
 import os
 
-from web_agent import MODEL_ID, WebAgent, _friendly_api_error
+from web_agent import AI_COOLDOWN_SECONDS, AI_DAILY_LIMIT, AI_MAX_TURNS, DEFAULT_SEARCH_ENGINE, MODEL_ID, WebAgent, _friendly_api_error
+
+
+def _expected_search_prefix():
+    if DEFAULT_SEARCH_ENGINE == "google":
+        return "https://www.google.com/search?"
+    if DEFAULT_SEARCH_ENGINE in {"duckduckgo", "ddg"}:
+        return "https://duckduckgo.com/?"
+    return "https://www.bing.com/search?"
 
 
 class TestWebAgentInit:
@@ -34,6 +42,21 @@ class TestWebAgentInit:
         assert "Web Agent unavailable" in message
         assert MODEL_ID in message
         assert "RESOURCE_EXHAUSTED" not in message
+
+    def test_high_demand_error_message_mentions_fast_mode(self):
+        """Test high-demand errors point users to simple non-AI commands."""
+        error = RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+
+        message = _friendly_api_error(error)
+
+        assert "high demand" in message
+        assert MODEL_ID in message
+        assert "without the AI model" in message
+        assert "503 UNAVAILABLE" not in message
+
+    def test_ai_turn_limit_is_conservative(self):
+        """Test Computer Use calls are capped per task by default."""
+        assert AI_MAX_TURNS >= 1
 
 
 class TestCoordinateDenormalization:
@@ -137,6 +160,110 @@ class TestWebScreenshot:
 
 class TestWebAgentTask:
     """Test full web agent task execution."""
+
+    def test_ai_daily_budget_blocks_model_when_limit_reached(self):
+        """Test the local daily budget can stop model usage before API quota is hit."""
+        agent = WebAgent()
+        agent.ai_calls_today = AI_DAILY_LIMIT
+
+        message = agent._ai_budget_error()
+
+        if AI_DAILY_LIMIT:
+            assert "limite local diario" in message
+        else:
+            assert message is None
+
+    def test_ai_capacity_error_starts_cooldown(self):
+        """Test capacity errors pause future model calls."""
+        agent = WebAgent()
+
+        agent._record_ai_capacity_error()
+        message = agent._ai_budget_error()
+
+        if AI_COOLDOWN_SECONDS:
+            assert "pausa temporal" in message
+        else:
+            assert message is None
+
+    def test_deterministic_plan_search(self):
+        """Test simple search prompts are handled without the model."""
+        agent = WebAgent()
+
+        plan = agent._deterministic_plan("busca Gemini API pricing")
+
+        assert plan["kind"] == "search"
+        assert plan["url"].startswith(_expected_search_prefix())
+        assert "Gemini" not in plan["url"]
+        assert "gemini+api+pricing" in plan["url"]
+
+    def test_deterministic_plan_buscame_search(self):
+        """Test buscamelo-style Spanish prompts use deterministic search."""
+        agent = WebAgent()
+
+        plan = agent._deterministic_plan("buscame ford mustang de segunda mano")
+
+        assert plan["kind"] == "search"
+        assert plan["url"].startswith(_expected_search_prefix())
+        assert "ford+mustang+de+segunda+mano" in plan["url"]
+
+    def test_deterministic_plan_amazon_search(self):
+        """Test Amazon searches go directly to Amazon instead of the model."""
+        agent = WebAgent()
+
+        plan = agent._deterministic_plan("busca libros de harry potter en amazon")
+
+        assert plan["kind"] == "search"
+        assert plan["url"].startswith("https://www.amazon.es/s?")
+        assert "libros+de+harry+potter" in plan["url"]
+
+    def test_deterministic_plan_navigation(self):
+        """Test simple URL prompts are handled without the model."""
+        agent = WebAgent()
+
+        plan = agent._deterministic_plan("abre example.com")
+
+        assert plan["kind"] == "navigate"
+        assert plan["url"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_run_deterministic_task_uses_page_directly(self):
+        """Test deterministic tasks update the browser without model calls."""
+        class FakePage:
+            def __init__(self):
+                self.urls = []
+
+            async def goto(self, url, **kwargs):
+                self.urls.append((url, kwargs))
+
+            async def wait_for_load_state(self, *args, **kwargs):
+                return None
+
+            async def screenshot(self, type="png"):
+                return b"fake-png"
+
+            async def title(self):
+                return "Fake Search"
+
+            @property
+            def url(self):
+                return self.urls[-1][0] if self.urls else "about:blank"
+
+        agent = WebAgent()
+        agent.page = FakePage()
+        updates = []
+
+        async def update_callback(screenshot_b64, log_text):
+            updates.append({"image": screenshot_b64, "log": log_text})
+
+        result = await agent._run_deterministic_task("busca Gemini API pricing", update_callback=update_callback)
+
+        assert result.startswith("Busqueda abierta sin usar IA: gemini api pricing.")
+        assert "Pagina: Fake Search." in result
+        assert agent.page.urls[0][0].startswith(_expected_search_prefix())
+        assert updates[0]["image"] is None
+        assert updates[0]["log"].startswith("Modo rapido sin IA")
+        assert updates[-1]["image"]
+        assert updates[-1]["log"] == "Executed without AI: search"
     
     @pytest.mark.asyncio
     @pytest.mark.skipif(

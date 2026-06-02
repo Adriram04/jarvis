@@ -39,7 +39,7 @@ const BrowserWindow = ({ imageSrc, logs, onClose, socket }) => {
             <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
                 {imageSrc ? (
                     <img
-                        src={`data:image/jpeg;base64,${imageSrc}`}
+                        src={`data:image/png;base64,${imageSrc}`}
                         alt="Browser View"
                         className="max-w-full max-h-full object-contain"
                     />

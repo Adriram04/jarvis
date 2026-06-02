@@ -2700,6 +2700,16 @@ async def prompt_web_agent(sid, data):
 
         result = await audio_loop.web_agent.run_task(prompt, update_callback=on_web_update)
         await sio.emit('browser_frame', {'image': None, 'log': result})
+        if getattr(audio_loop, "session", None):
+            try:
+                await audio_loop.session.send(
+                    input=f"System Notification: Web Agent has finished.\nPrompt: {prompt}\nResult: {result}",
+                    end_of_turn=False,
+                )
+            except Exception as exc:
+                print(f"[SERVER] Could not attach Web Agent result to live session: {exc}")
+        if getattr(audio_loop, "project_manager", None):
+            audio_loop.project_manager.log_chat("System", f"Web Agent result for '{prompt}': {result}")
         await sio.emit('status', {'msg': 'Web Agent finished'})
         
     except Exception as e:

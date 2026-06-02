@@ -2,6 +2,10 @@ import os
 import time
 import asyncio
 import base64
+import re
+import unicodedata
+from datetime import date
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from google import genai
@@ -18,7 +22,20 @@ if not API_KEY:
 SCREEN_WIDTH = 1440
 SCREEN_HEIGHT = 900
 # UPDATED: Use the specific Computer Use preview model
-MODEL_ID = "gemini-3-flash-preview"
+MODEL_ID = os.getenv("JARVIS_WEB_AGENT_MODEL", "gemini-3-flash-preview")
+DEFAULT_SEARCH_ENGINE = os.getenv("JARVIS_WEB_AGENT_SEARCH_ENGINE", "bing").strip().lower() or "bing"
+
+
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)) or default)
+    except Exception:
+        return int(default)
+
+
+AI_MAX_TURNS = max(1, _env_int("JARVIS_WEB_AGENT_AI_MAX_TURNS", 4))
+AI_DAILY_LIMIT = max(0, _env_int("JARVIS_WEB_AGENT_AI_DAILY_LIMIT", 20))
+AI_COOLDOWN_SECONDS = max(0, _env_int("JARVIS_WEB_AGENT_AI_COOLDOWN_SECONDS", 1800))
 
 
 class WebAgentQuotaError(RuntimeError):
@@ -33,7 +50,28 @@ def _friendly_api_error(error):
             f"for this API project/model ({MODEL_ID}). Check your Gemini billing/quota, "
             "or try again later if this is a temporary rate limit."
         )
+    if "UNAVAILABLE" in message or "high demand" in message or "503" in message:
+        return (
+            "Web Agent unavailable: Gemini Computer Use is experiencing high demand "
+            f"for this model ({MODEL_ID}). Simple navigation/search commands can still run "
+            "without the AI model; try a simpler command or wait before using complex visual automation."
+        )
     return f"Web Agent API error: {message}"
+
+
+def _is_ai_capacity_error(error):
+    message = str(error)
+    return any(token in message for token in ("RESOURCE_EXHAUSTED", "Quota exceeded", "429", "UNAVAILABLE", "high demand", "503"))
+
+
+def _normalize_text(text):
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", without_accents.lower()).strip()
+
+
+def _strip_url_punctuation(value):
+    return str(value or "").strip().strip(".,;:!?¡¿()[]{}<>\"'")
 
 class WebAgent:
     def __init__(self):
@@ -41,12 +79,160 @@ class WebAgent:
         self.browser = None
         self.context = None
         self.page = None
+        self.ai_usage_date = date.today().isoformat()
+        self.ai_calls_today = 0
+        self.ai_cooldown_until = 0.0
 
     def denormalize_x(self, x: int, width: int) -> int:
         return int((x / 1000) * width)
 
     def denormalize_y(self, y: int, height: int) -> int:
         return int((y / 1000) * height)
+
+    def _refresh_ai_budget_day(self):
+        today = date.today().isoformat()
+        if self.ai_usage_date != today:
+            self.ai_usage_date = today
+            self.ai_calls_today = 0
+
+    def _ai_budget_error(self):
+        self._refresh_ai_budget_day()
+        now = time.time()
+        if now < self.ai_cooldown_until:
+            remaining = max(1, int(self.ai_cooldown_until - now))
+            return (
+                "Web Agent IA en pausa temporal para no seguir consumiendo cuota "
+                f"tras un error de capacidad. Reintenta en {remaining} segundos o usa una busqueda simple."
+            )
+        if AI_DAILY_LIMIT and self.ai_calls_today >= AI_DAILY_LIMIT:
+            return (
+                "Web Agent IA no usada: limite local diario alcanzado "
+                f"({self.ai_calls_today}/{AI_DAILY_LIMIT}). Las busquedas simples siguen funcionando sin IA."
+            )
+        return None
+
+    def _record_ai_call(self):
+        self._refresh_ai_budget_day()
+        self.ai_calls_today += 1
+
+    def _record_ai_capacity_error(self):
+        if AI_COOLDOWN_SECONDS:
+            self.ai_cooldown_until = max(self.ai_cooldown_until, time.time() + AI_COOLDOWN_SECONDS)
+
+    def _extract_url(self, prompt):
+        match = re.search(
+            r"(https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?::\d+)?(?:/[^\s]*)?)",
+            str(prompt or ""),
+        )
+        if not match:
+            return None
+        url = _strip_url_punctuation(match.group(1))
+        if not re.match(r"^https?://", url, re.IGNORECASE):
+            url = f"https://{url}"
+        return url
+
+    def _extract_search_query(self, prompt):
+        text = str(prompt or "").strip()
+        normalized = _normalize_text(text)
+        patterns = [
+            r"(?:abre\s+el\s+agente\s+web\s+y\s+busca|busca\s+en\s+google|buscar\s+en\s+google|buscame|busqueme|busca|buscar|encuentrame|encuentra|mirame|mira|search\s+for|search|find|investiga|consulta)\s+(.+)",
+            r"(?:googlea|google)\s+(.+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if not match:
+                continue
+            query = match.group(1).strip()
+            query = re.sub(r"^(?:sobre|por|acerca de|informacion sobre)\s+", "", query).strip()
+            query = query.strip(" .,!?:;\"'")
+            return query or None
+        return None
+
+    def _search_url_for_query(self, query, prompt):
+        normalized = _normalize_text(f"{prompt} {query}")
+        query = str(query or "").strip()
+
+        if "amazon" in normalized:
+            cleaned = re.sub(r"\b(?:en\s+)?amazon(?:\.(?:es|com))?\b", " ", query, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip() or query
+            return f"https://www.amazon.es/s?k={quote_plus(cleaned)}"
+
+        engine = "google" if "google" in normalized else DEFAULT_SEARCH_ENGINE
+        if engine == "google":
+            return f"https://www.google.com/search?q={quote_plus(query)}"
+        if engine in {"duckduckgo", "ddg"}:
+            return f"https://duckduckgo.com/?q={quote_plus(query)}"
+        return f"https://www.bing.com/search?q={quote_plus(query)}"
+
+    def _deterministic_plan(self, prompt):
+        text = str(prompt or "").strip()
+        if not text:
+            return None
+
+        normalized = _normalize_text(text)
+        query = self._extract_search_query(text)
+        if query:
+            search_url = self._search_url_for_query(query, text)
+            return {
+                "kind": "search",
+                "url": search_url,
+                "log": f"Busqueda sin IA: {query}",
+                "summary": f"Busqueda abierta sin usar IA: {query}",
+            }
+
+        url = self._extract_url(text)
+        if url and (
+            re.search(r"\b(abre|abrir|open|navega|navegar|ve|entra|ir|go)\b", normalized)
+            or normalized == _normalize_text(url)
+            or normalized.startswith(("http://", "https://", "www."))
+        ):
+            return {
+                "kind": "navigate",
+                "url": url,
+                "log": f"Navegacion sin IA: {url}",
+                "summary": f"Pagina abierta sin usar IA: {url}",
+            }
+
+        if normalized in {"abre el navegador", "abrir navegador", "open browser", "open web browser"}:
+            return {
+                "kind": "navigate",
+                "url": "https://www.google.com",
+                "log": "Navegador abierto sin IA",
+                "summary": "Navegador abierto sin usar IA.",
+            }
+
+        return None
+
+    async def _emit_page_update(self, update_callback, log_text):
+        if not update_callback:
+            return
+        screenshot = await self.page.screenshot(type="png")
+        encoded_image = base64.b64encode(screenshot).decode("utf-8")
+        await update_callback(encoded_image, log_text)
+
+    async def _run_deterministic_task(self, prompt, update_callback=None):
+        plan = self._deterministic_plan(prompt)
+        if not plan:
+            return None
+
+        print(f"[FAST] {plan['log']}")
+        if update_callback:
+            await update_callback(None, f"Modo rapido sin IA: {plan['log']}")
+
+        await self.page.goto(plan["url"], wait_until="domcontentloaded")
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+
+        await self._emit_page_update(update_callback, f"Executed without AI: {plan['kind']}")
+        page_title = ""
+        try:
+            page_title = await self.page.title()
+        except Exception:
+            pass
+        suffix = f" Pagina: {page_title}." if page_title else ""
+        return f"{plan['summary']}.{suffix} URL: {self.page.url}"
 
     async def execute_function_calls(self, function_calls):
         results = []
@@ -220,15 +406,6 @@ class WebAgent:
             # Start at Google
             await self.page.goto("https://www.google.com")
 
-            config = types.GenerateContentConfig(
-                tools=[types.Tool(
-                    computer_use=types.ComputerUse(
-                        environment=types.Environment.ENVIRONMENT_BROWSER
-                    )
-                )],
-                thinking_config=types.ThinkingConfig(include_thoughts=True) 
-            )
-
             # UPDATED: Capture initial screenshot as PNG
             initial_screenshot = await self.page.screenshot(type="png")
             
@@ -236,6 +413,23 @@ class WebAgent:
             if update_callback:
                 encoded_image = base64.b64encode(initial_screenshot).decode('utf-8')
                 await update_callback(encoded_image, "Web Agent Initialized")
+
+            deterministic_result = await self._run_deterministic_task(prompt, update_callback)
+            if deterministic_result:
+                if self.browser:
+                    await self.browser.close()
+                    self.browser = None
+                print("[CLOSE] Browser closed.")
+                return deterministic_result
+
+            config = types.GenerateContentConfig(
+                tools=[types.Tool(
+                    computer_use=types.ComputerUse(
+                        environment=types.Environment.ENVIRONMENT_BROWSER
+                    )
+                )],
+                thinking_config=types.ThinkingConfig(include_thoughts=True)
+            )
 
             chat_history = [
                 types.Content(
@@ -248,12 +442,30 @@ class WebAgent:
                 )
             ]
 
-            MAX_TURNS = 20
+            budget_error = self._ai_budget_error()
+            if budget_error:
+                print(f"[BUDGET] {budget_error}")
+                if update_callback:
+                    await update_callback(None, f"Error: {budget_error}")
+                if self.browser:
+                    await self.browser.close()
+                    self.browser = None
+                return budget_error
+
+            MAX_TURNS = AI_MAX_TURNS
             
             for turn in range(MAX_TURNS):
                 print(f"\n--- Turn {turn + 1} ---")
                 
                 try:
+                    budget_error = self._ai_budget_error()
+                    if budget_error:
+                        print(f"[BUDGET] {budget_error}")
+                        if update_callback:
+                            await update_callback(None, f"Error: {budget_error}")
+                        final_response = budget_error
+                        break
+                    self._record_ai_call()
                     response = await self.client.aio.models.generate_content(
                         model=MODEL_ID,
                         contents=chat_history,
@@ -262,6 +474,8 @@ class WebAgent:
                 except Exception as e:
                     friendly_error = _friendly_api_error(e)
                     print(f"[CRITICAL] {friendly_error}")
+                    if _is_ai_capacity_error(e):
+                        self._record_ai_capacity_error()
                     if update_callback:
                         await update_callback(None, f"Error: {friendly_error}")
                     if self.browser:
