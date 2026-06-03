@@ -13,6 +13,8 @@ let mainWindow;
 let pythonProcess;
 let openclawProcess;
 let openclawStartedByJarvis = false;
+let openwaProcess;
+let openwaStartedByJarvis = false;
 let childCleanupStarted = false;
 
 const projectRoot = path.join(__dirname, '..');
@@ -99,6 +101,11 @@ function cleanupChildProcesses() {
         openclawStartedByJarvis = false;
         killProcessTree(openclawProcess, 'OpenClaw');
         openclawProcess = null;
+    }
+    if (openwaProcess) {
+        openwaStartedByJarvis = false;
+        killProcessTree(openwaProcess, 'OpenWA');
+        openwaProcess = null;
     }
 }
 
@@ -230,6 +237,155 @@ async function startOpenClawGateway() {
         console.warn(`OpenClaw gateway did not report port ${OPENCLAW_GATEWAY_PORT} as ready before timeout.`);
     }
 }
+function getOpenWAPort() {
+    try {
+        const baseUrl = process.env.JARVIS_OPENWA_BASE_URL || 'http://127.0.0.1:2785/api';
+        const parsed = new URL(baseUrl);
+        return Number(parsed.port || 2785);
+    } catch {
+        return 2785;
+    }
+}
+
+function resolveNpmExecutable() {
+    return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+function resolveOpenWADir() {
+    if (process.env.JARVIS_OPENWA_DIR) {
+        return path.resolve(process.env.JARVIS_OPENWA_DIR);
+    }
+
+    const home = process.env.USERPROFILE || process.env.HOME || '';
+    return path.join(home, 'OpenWA');
+}
+
+function hydrateOpenWAApiKey(openwaDir) {
+    if (process.env.JARVIS_OPENWA_API_KEY) return;
+
+    const apiKeyPath = path.join(openwaDir, 'data', '.api-key');
+    if (!fs.existsSync(apiKeyPath)) return;
+
+    const apiKey = fs.readFileSync(apiKeyPath, 'utf8').trim();
+    if (apiKey) {
+        process.env.JARVIS_OPENWA_API_KEY = apiKey;
+        console.log('OpenWA API key loaded from data/.api-key');
+    }
+}
+
+function waitForHttpUrl(url, timeoutMs = 60000) {
+    const startedAt = Date.now();
+
+    return new Promise((resolve) => {
+        const check = () => {
+            const http = require('http');
+
+            const req = http.get(url, (res) => {
+                res.resume();
+                if (res.statusCode >= 200 && res.statusCode < 500) {
+                    resolve(true);
+                    return;
+                }
+
+                retry();
+            });
+
+            req.setTimeout(1500, () => {
+                req.destroy();
+                retry();
+            });
+
+            req.on('error', retry);
+        };
+
+        const retry = () => {
+            if (Date.now() - startedAt >= timeoutMs) {
+                resolve(false);
+                return;
+            }
+
+            setTimeout(check, 1000);
+        };
+
+        check();
+    });
+}
+
+async function startOpenWAService() {
+    if (!envFlag('JARVIS_OPENWA_AUTO_START', false)) {
+        console.log('OpenWA auto-start disabled by JARVIS_OPENWA_AUTO_START.');
+        return;
+    }
+
+    if (!envFlag('JARVIS_OPENWA_ENABLED', false)) {
+        console.log('OpenWA is disabled by JARVIS_OPENWA_ENABLED.');
+        return;
+    }
+
+    const openwaPort = getOpenWAPort();
+
+    if (await checkPortTaken(openwaPort)) {
+        console.log(`OpenWA already seems to be running on port ${openwaPort}.`);
+        hydrateOpenWAApiKey(resolveOpenWADir());
+        return;
+    }
+
+    const openwaDir = resolveOpenWADir();
+
+    if (!fs.existsSync(openwaDir) || !fs.existsSync(path.join(openwaDir, 'package.json'))) {
+        console.warn(`OpenWA directory not found or invalid: ${openwaDir}`);
+        console.warn('Set JARVIS_OPENWA_DIR in .env to the real OpenWA folder.');
+        return;
+    }
+
+    hydrateOpenWAApiKey(openwaDir);
+
+    const npmScript = process.env.JARVIS_OPENWA_NPM_SCRIPT || 'dev';
+
+    console.log(`Starting OpenWA from ${openwaDir} using npm run ${npmScript}`);
+
+    openwaProcess = spawn(resolveNpmExecutable(), ['run', npmScript], {
+        cwd: openwaDir,
+        shell: false,
+        windowsHide: true,
+        env: {
+            ...process.env,
+        },
+    });
+
+    openwaStartedByJarvis = true;
+
+    openwaProcess.stdout.on('data', (data) => {
+        console.log(`[OpenWA]: ${data}`);
+    });
+
+    openwaProcess.stderr.on('data', (data) => {
+        console.warn(`[OpenWA]: ${data}`);
+    });
+
+    openwaProcess.on('error', (err) => {
+        console.error('Failed to start OpenWA:', err.message);
+        openwaProcess = null;
+        openwaStartedByJarvis = false;
+    });
+
+    openwaProcess.on('exit', (code, signal) => {
+        if (openwaStartedByJarvis) {
+            console.log(`OpenWA exited (code=${code}, signal=${signal}).`);
+        }
+        openwaProcess = null;
+        openwaStartedByJarvis = false;
+    });
+
+    const healthUrl = process.env.JARVIS_OPENWA_HEALTH_URL || `http://127.0.0.1:${openwaPort}/api/health`;
+    const ready = await waitForHttpUrl(healthUrl, 60000);
+
+    if (ready) {
+        console.log(`OpenWA is ready at ${healthUrl}`);
+    } else {
+        console.warn(`OpenWA did not become ready at ${healthUrl}.`);
+    }
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -322,6 +478,7 @@ app.whenReady().then(async () => {
     });
 
     await startOpenClawGateway();
+    await startOpenWAService();
 
     checkBackendPort(8000).then((isTaken) => {
         if (isTaken) {

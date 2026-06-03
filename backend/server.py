@@ -2,6 +2,14 @@ import sys
 import asyncio
 import platform
 
+# Force UTF-8 on stdout/stderr so print() never crashes on non-cp1252 chars
+# (emojis, accents, arrows) when launched under the Windows console / Electron.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # Fix for asyncio subprocess support on Windows
 # MUST BE SET BEFORE OTHER IMPORTS
 if sys.platform == 'win32':
@@ -46,6 +54,7 @@ from automation_manager import AutomationManager
 from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
 from integrations.openclaw_bridge import OpenClawBridge
+from integrations.openwa_bridge import OpenWABridge
 from openclaw_allowlist_sync import sync_openclaw_whatsapp_allowlist
 from openclaw_autopilot_manager import OpenClawAutopilotManager
 from openclaw_contacts_importer import import_contacts_csv, import_contacts_vcf
@@ -268,6 +277,7 @@ loop_task = None
 authenticator = None
 kasa_agent = KasaAgent()
 openclaw_bridge = OpenClawBridge()
+openwa_bridge = OpenWABridge()
 openclaw_permissions = PermissionsManager()
 pending_actions_manager = PendingActionsManager()
 openclaw_autopilot_manager = OpenClawAutopilotManager()
@@ -418,6 +428,57 @@ async def require_fresh_face_auth(reload_reference=False):
     await sio.emit('auth_status', {'authenticated': False})
     asyncio.create_task(authenticator.start_authentication_loop())
 
+async def _openwa_session_startup():
+    """On server start: ensure the OpenWA session is active and webhook is registered."""
+    await asyncio.sleep(2)  # brief pause so OpenWA has time to respond
+    try:
+        result = await openwa_bridge.ensure_session_active()
+        action = result.get("action", "")
+        print(f"[OPENWA] Session startup ({action}): {result.get('message', '')}")
+    except Exception as exc:
+        print(f"[OPENWA] Session startup error: {exc}")
+        return
+
+    # Register webhook so inbound messages reach JARVIS
+    try:
+        webhook_url = os.getenv(
+            "JARVIS_OPENWA_WEBHOOK_URL",
+            "http://127.0.0.1:8000/api/openwa/inbound",
+        ).strip()
+        wh_result = await openwa_bridge.ensure_webhook_configured(webhook_url)
+        print(f"[OPENWA] Webhook ({wh_result.get('action', '')}): {wh_result.get('message', '')}")
+    except Exception as exc:
+        print(f"[OPENWA] Webhook setup error: {exc}")
+
+
+async def _openwa_watchdog_loop():
+    """Background task: monitor OpenWA session and restart it if disconnected."""
+    interval = max(10, int(os.getenv("JARVIS_OPENWA_WATCHDOG_INTERVAL_SECONDS", "30") or 30))
+    await asyncio.sleep(interval)  # initial delay before first check
+    while True:
+        try:
+            result = await openwa_bridge.ensure_session_active()
+            action = result.get("action", "")
+            if action in ("started", "created_and_started"):
+                print(f"[OPENWA] Watchdog recovered session: {result.get('message', '')}")
+                await sio.emit("whatsapp_inbound_message", {
+                    "message": None,
+                    "unread_count": openclaw_messages_manager.get_unread_count(channel="whatsapp"),
+                    "session_recovered": True,
+                })
+                # Re-register webhook after session restart
+                webhook_url = os.getenv(
+                    "JARVIS_OPENWA_WEBHOOK_URL",
+                    "http://127.0.0.1:8000/api/openwa/inbound",
+                ).strip()
+                wh_result = await openwa_bridge.ensure_webhook_configured(webhook_url)
+                if wh_result.get("action") == "created":
+                    print(f"[OPENWA] Watchdog re-registered webhook: {wh_result.get('message', '')}")
+        except Exception as exc:
+            print(f"[OPENWA] Watchdog error: {exc}")
+        await asyncio.sleep(interval)
+
+
 @app.on_event("startup")
 async def startup_event():
     global automation_scheduler_task
@@ -437,6 +498,13 @@ async def startup_event():
     if automation_scheduler_task is None or automation_scheduler_task.done():
         automation_scheduler_task = asyncio.create_task(_automation_scheduler_loop())
         print("[SERVER] Automation scheduler started.")
+
+    if openwa_bridge.is_enabled():
+        asyncio.create_task(_openwa_session_startup())
+        if _env_bool("JARVIS_OPENWA_WATCHDOG_ENABLED", True):
+            asyncio.create_task(_openwa_watchdog_loop())
+            print(f"[OPENWA] Session watchdog started (interval: {os.getenv('JARVIS_OPENWA_WATCHDOG_INTERVAL_SECONDS', '30')}s).")
+
     await dispatch_automation_event("system.startup", {"started_at": datetime.now().isoformat(timespec="seconds")})
 
 class _MemoryStatusEx(ctypes.Structure):
@@ -883,6 +951,13 @@ def _env_bool(name, default=False):
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
+def _whatsapp_provider():
+    """Returns the configured WhatsApp provider ('openwa' or 'openclaw')."""
+    return os.getenv("JARVIS_WHATSAPP_PROVIDER", "openclaw").strip().lower() or "openclaw"
+
+def _is_whatsapp_channel_str(channel):
+    return str(channel or "").strip().lower() == "whatsapp"
+
 def _sync_openclaw_whatsapp_allowlist_best_effort(force=False):
     if os.getenv("PYTEST_CURRENT_TEST") and not force:
         return {"success": True, "skipped": True, "reason": "pytest"}
@@ -931,7 +1006,8 @@ async def _execute_openclaw_action(action_type, payload):
             raw=result,
         )
         return result
-    if action_type in {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply"}:
+    _whatsapp_send_actions = {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply", "send_image", "send_whatsapp_image", "openclaw_send_image"}
+    if action_type in _whatsapp_send_actions:
         allowed, target_record = _allowed_whatsapp_target_for_payload(payload)
         if not allowed:
             display = (
@@ -948,19 +1024,43 @@ async def _execute_openclaw_action(action_type, payload):
                 raw={"target": target_record, "payload": _public_openclaw_payload(payload)},
             )
         _sync_openclaw_whatsapp_allowlist_best_effort()
+
+        # Route WhatsApp sends to OpenWA when configured as provider
+        channel = payload.get("channel", "whatsapp")
+        if _is_whatsapp_channel_str(channel) and _whatsapp_provider() == "openwa":
+            result = await openwa_bridge.execute_action(action_type, _public_openclaw_payload(payload))
+            rule_id = payload.get("_autopilot_rule_id")
+            if rule_id and result.get("success"):
+                openclaw_autopilot_manager.register_reply(rule_id)
+            real_target = payload.get("canonical_target") or payload.get("target")
+            openclaw_events_manager.add_event(
+                "outbound" if result.get("success") else "error",
+                channel=channel,
+                kind=payload.get("kind", "auto"),
+                target=real_target,
+                display_target=payload.get("display_target") or payload.get("target"),
+                message=payload.get("message") or payload.get("text"),
+                success=result.get("success"),
+                error=result.get("error") or (None if result.get("success") else result.get("summary")),
+                raw=result,
+            )
+            return result
+
     result = await openclaw_bridge.execute_action(action_type, _public_openclaw_payload(payload))
     rule_id = payload.get("_autopilot_rule_id")
     if rule_id and result.get("success"):
         openclaw_autopilot_manager.register_reply(rule_id)
-    if action_type in {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply"}:
+    _log_actions = {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply", "send_image", "send_whatsapp_image", "openclaw_send_image"}
+    if action_type in _log_actions:
         real_target = payload.get("canonical_target") or payload.get("target")
+        msg_preview = payload.get("message") or payload.get("text") or payload.get("caption") or ("[imagen]" if "image" in action_type else "")
         openclaw_events_manager.add_event(
             "outbound" if result.get("success") else "error",
             channel=payload.get("channel", "whatsapp"),
             kind=payload.get("kind", "auto"),
             target=real_target,
             display_target=payload.get("display_target") or payload.get("target"),
-            message=payload.get("message") or payload.get("text"),
+            message=msg_preview,
             success=result.get("success"),
             error=result.get("error") or (None if result.get("success") else result.get("summary")),
             raw=result,
@@ -1667,11 +1767,87 @@ async def api_openclaw_send_pending(data: dict = Body(default={})):
 async def api_openclaw_events(limit: int = 100, type: str = None, channel: str = None):
     return _api_success(openclaw_events_manager.list_events(limit=limit, type=type, channel=channel))
 
+# Google Calendar token-expiry detection + auto re-auth ----------------------
+_google_reauth_in_progress = False
+
+
+def _result_has_google_token_expiry(result):
+    if not result:
+        return False
+    try:
+        blob = json.dumps(result, ensure_ascii=False, default=str).lower()
+    except Exception:
+        blob = str(result).lower()
+    return "invalid_grant" in blob or "token has been expired or revoked" in blob
+
+
+async def _run_google_reauth():
+    """Run the local OAuth helper to regenerate the Google Calendar refresh token."""
+    global _google_reauth_in_progress
+    if _google_reauth_in_progress:
+        return {"success": False, "error": "Una reconexión de Google ya está en curso."}
+    _google_reauth_in_progress = True
+    try:
+        script = str(PROJECT_ROOT / "scripts" / "get_google_calendar_token.py")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(PROJECT_ROOT),
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=320)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"success": False, "error": "Tiempo de espera agotado durante la reconexión."}
+        out = (stdout or b"").decode("utf-8", errors="replace")
+        success = proc.returncode == 0
+        await sio.emit("calendar_reauth_result", {"success": success})
+        return {"success": success, "output": out[-1500:]}
+    finally:
+        _google_reauth_in_progress = False
+
+
+async def _maybe_handle_google_expiry(result):
+    """If a calendar result shows an expired Google token, surface a friendly
+    error, notify the UI, and optionally auto-launch the re-auth flow."""
+    if not _result_has_google_token_expiry(result):
+        return result
+
+    await sio.emit("calendar_reauth_required", {"reason": "google_token_expired"})
+
+    if _env_bool("JARVIS_GOOGLE_AUTO_REAUTH", False) and not _google_reauth_in_progress:
+        asyncio.create_task(_run_google_reauth())
+
+    if isinstance(result, dict):
+        result = dict(result)
+        result["code"] = "GOOGLE_TOKEN_EXPIRED"
+        result["summary"] = "El token de Google Calendar ha caducado. Pulsa 'Reconectar Google Calendar'."
+        result["error"] = result["summary"]
+    return result
+
+
 @app.post("/api/openclaw/action")
 async def api_openclaw_action(data: dict = Body(default={})):
     action_type = data.get("action_type") or data.get("type")
     payload = data.get("payload") or {}
-    return _api_from_openclaw_result(await _execute_or_queue_openclaw_action(action_type, payload))
+    result = await _execute_or_queue_openclaw_action(action_type, payload)
+    result = await _maybe_handle_google_expiry(result)
+    return _api_from_openclaw_result(result)
+
+
+@app.post("/api/calendar/reauth")
+async def api_calendar_reauth():
+    """Launch the Google Calendar OAuth re-auth flow (opens a browser to grant access)."""
+    result = await _run_google_reauth()
+    if result.get("success"):
+        return _api_success({
+            "message": "Google Calendar reconectado. Recarga el calendario; si sigue fallando, reinicia JARVIS.",
+        })
+    return _api_error(result.get("error") or "No se pudo reconectar Google Calendar.", data=result)
 
 
 @app.get("/api/automations")
@@ -1749,6 +1925,15 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
         success=True,
         raw=data,
     )
+
+    # Notify frontend and JARVIS about new inbound WhatsApp message
+    unread_count = openclaw_messages_manager.get_unread_count(channel="whatsapp")
+    await sio.emit("whatsapp_inbound_message", {
+        "message": stored_message,
+        "unread_count": unread_count,
+    })
+    await _notify_jarvis_inbound_whatsapp(incoming_message, target_record)
+
     automation_dispatch = await dispatch_automation_event(
         "openclaw.inbound_message",
         {
@@ -1926,6 +2111,580 @@ async def api_openclaw_autopilot_rule_delete(rule_id: str):
         {"rule_id": rule_id},
         f"Eliminar regla automatica {rule_id}",
     )
+
+def _openwa_id_to_canonical(openwa_id: str) -> str:
+    """Convert '34600111222@c.us' or '34600111222@g.us' → '+34600111222' / keep @g.us."""
+    if not openwa_id:
+        return ""
+    if openwa_id.endswith("@g.us"):
+        return openwa_id  # groups stay as-is
+    phone = openwa_id.split("@")[0].strip()
+    if phone and not phone.startswith("+"):
+        return f"+{phone}"
+    return phone
+
+
+def _normalize_openwa_inbound(data: dict, targets_manager=None) -> dict | None:
+    """
+    Convert an OpenWA webhook payload to JARVIS's standard inbound message format.
+    Returns None for messages sent by us (fromMe=True) or unrecognised events.
+    """
+    event = str(data.get("event") or "").lower()
+    if event and event not in ("message.received", "*", ""):
+        return None
+
+    msg = data.get("data") or data  # some variants nest under "data", some are flat
+    if not isinstance(msg, dict):
+        return None
+
+    from_me = bool(msg.get("fromMe", False))
+    if from_me:
+        return None  # skip our own sent messages
+
+    from_id = str(msg.get("from") or "").strip()
+    chat_id = str(msg.get("chatId") or from_id).strip()
+    is_group = bool(msg.get("isGroup", False)) or chat_id.endswith("@g.us")
+    body = str(msg.get("body") or "").strip()
+    msg_type = str(msg.get("type") or "chat").lower()
+    message_id = str(msg.get("id") or data.get("deliveryId") or data.get("idempotencyKey") or "").strip()
+
+    # Normalize timestamp
+    ts_raw = msg.get("timestamp")
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        if isinstance(ts_raw, (int, float)):
+            ts = float(ts_raw)
+            if ts > 10_000_000_000:
+                ts /= 1000
+            timestamp_iso = _dt.fromtimestamp(ts, tz=_tz.utc).isoformat(timespec="seconds")
+        else:
+            ts_str = str(data.get("timestamp") or ts_raw or "").strip()
+            if ts_str:
+                timestamp_iso = ts_str
+            else:
+                timestamp_iso = _dt.now(_tz.utc).isoformat(timespec="seconds")
+    except Exception:
+        from datetime import datetime as _dt, timezone as _tz
+        timestamp_iso = _dt.now(_tz.utc).isoformat(timespec="seconds")
+
+    # Resolve contact name from local agenda
+    canonical = _openwa_id_to_canonical(from_id)
+    display_name = ""
+    if targets_manager:
+        record = targets_manager.find_by_canonical_target("whatsapp", canonical)
+        if not record and from_id != canonical:
+            record = targets_manager.find_by_canonical_target("whatsapp", from_id)
+        if record:
+            display_name = record.get("display_name") or ""
+    if not display_name:
+        display_name = str(
+            msg.get("pushName") or msg.get("senderName") or msg.get("notifyName") or canonical or from_id
+        ).strip()
+
+    return {
+        "channel": "whatsapp",
+        "kind": "group" if is_group else "user",
+        "target": canonical or from_id,
+        "canonical_target": canonical or from_id,
+        "display_target": display_name or canonical or from_id,
+        "sender": from_id,
+        "sender_name": display_name,
+        "message": body,
+        "message_id": message_id,
+        "timestamp": timestamp_iso,
+        "type": msg_type,
+        "is_group": is_group,
+        "chat_id": chat_id,
+    }
+
+
+@app.post("/api/openwa/inbound")
+async def api_openwa_inbound(request: Request, data: dict = Body(default={})):
+    """
+    Receives webhook events from OpenWA (message.received, session.connected, etc.).
+    Configured automatically on JARVIS startup via ensure_webhook_configured().
+    """
+    event = str(data.get("event") or "").lower()
+
+    # Handle session status events
+    if event in ("session.connected", "session.disconnected"):
+        await sio.emit("whatsapp_inbound_message", {
+            "message": None,
+            "unread_count": openclaw_messages_manager.get_unread_count(channel="whatsapp"),
+            "session_event": event,
+        })
+        return _api_success({"handled": True, "event": event})
+
+    if event and event != "message.received":
+        return _api_success({"handled": False, "event": event, "reason": "event_ignored"})
+
+    incoming_message = _normalize_openwa_inbound(data, targets_manager=openclaw_targets_manager)
+    if incoming_message is None:
+        return _api_success({"handled": False, "reason": "from_me_or_invalid"})
+
+    # Resolve the real phone number + contact name. WhatsApp now uses LIDs
+    # (e.g. 222092792471622@lid) instead of phone numbers for privacy; OpenWA's
+    # contact endpoint maps the LID to the real number ("id": 34xxxx@c.us) and name.
+    await _resolve_openwa_real_identity(incoming_message)
+
+    target_record = openclaw_targets_manager.upsert_from_inbound(incoming_message)
+
+    # Auto-allow contacts that message us so JARVIS can reply to them
+    if target_record and not target_record.get("allowed"):
+        target_record = openclaw_targets_manager.mark_allowed(target_record["id"], True)
+
+    stored_message = _save_inbound_message(incoming_message, data)
+    openclaw_events_manager.add_event(
+        "inbound",
+        channel=incoming_message.get("channel"),
+        kind=incoming_message.get("kind"),
+        target=incoming_message.get("target"),
+        display_target=incoming_message.get("display_target"),
+        message=incoming_message.get("message"),
+        success=True,
+        raw=data,
+    )
+
+    unread_count = openclaw_messages_manager.get_unread_count(channel="whatsapp")
+    await sio.emit("whatsapp_inbound_message", {
+        "message": stored_message,
+        "unread_count": unread_count,
+    })
+    await _notify_jarvis_inbound_whatsapp(incoming_message, target_record)
+
+    await dispatch_automation_event(
+        "openclaw.inbound_message",
+        {
+            "incoming": incoming_message,
+            "message": stored_message,
+            "stored_message": stored_message,
+            "target": target_record,
+            "raw": data,
+        },
+    )
+
+    return _api_success({
+        "handled": True,
+        "event": event or "message.received",
+        "message_id": stored_message.get("id"),
+        "sender": incoming_message.get("display_target"),
+    })
+
+
+# Cache LID/contact-id -> {canonical, name} so we don't hit OpenWA on every message.
+_openwa_identity_cache = {}
+
+
+async def _resolve_openwa_real_identity(incoming_message):
+    """Resolve a WhatsApp sender's REAL phone number and contact name via OpenWA.
+
+    WhatsApp now sends a LID (e.g. 222092792471622@lid) instead of the phone
+    number. OpenWA's contact endpoint maps it: it returns the real number in the
+    "id" field (34635366743@c.us) and the saved name in "name"/"pushName".
+    Mutates incoming_message in place with the real canonical_target and name.
+    """
+    if incoming_message.get("is_group"):
+        return  # groups keep their @g.us id
+
+    sender_raw = str(incoming_message.get("sender") or "").strip()
+    if not sender_raw or "@" not in sender_raw:
+        return
+
+    # Cache hit
+    cached = _openwa_identity_cache.get(sender_raw)
+    if cached:
+        if cached.get("canonical"):
+            incoming_message["target"] = cached["canonical"]
+            incoming_message["canonical_target"] = cached["canonical"]
+        if cached.get("name"):
+            incoming_message["display_target"] = cached["name"]
+            incoming_message["sender_name"] = cached["name"]
+        return
+
+    try:
+        sid = await openwa_bridge._get_session_uuid()
+        raw = await openwa_bridge._http_get(f"/sessions/{sid}/contacts/{sender_raw}")
+        if not isinstance(raw, dict) or not raw.get("success"):
+            return
+        contact = raw.get("json") or {}
+        real_id = str(contact.get("id") or "").strip()
+        name = (str(contact.get("name") or "").strip() or str(contact.get("pushName") or "").strip())
+
+        canonical = None
+        if real_id.endswith("@c.us"):
+            canonical = "+" + real_id.split("@")[0]
+            incoming_message["target"] = canonical
+            incoming_message["canonical_target"] = canonical
+        if name:
+            incoming_message["display_target"] = name
+            incoming_message["sender_name"] = name
+
+        _openwa_identity_cache[sender_raw] = {"canonical": canonical, "name": name}
+        if len(_openwa_identity_cache) > 2000:
+            _openwa_identity_cache.clear()
+    except Exception:
+        pass
+
+
+# Inbound-notification throttling state.
+# WhatsApp/OpenWA replays a burst of recent messages when the session connects.
+# Without throttling, each one would fire session.send() into the live Gemini
+# session concurrently and crash it (error 1007 "invalid argument").
+_announced_whatsapp_ids = set()
+_last_whatsapp_voice_announce_at = 0.0
+
+
+def _message_age_seconds(incoming_message):
+    """Return how many seconds ago the message was sent, or None if unknown."""
+    from datetime import datetime as _dt, timezone as _tz
+    raw = incoming_message.get("timestamp")
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            ts = float(raw)
+            if ts > 10_000_000_000:
+                ts /= 1000
+            sent = _dt.fromtimestamp(ts, tz=_tz.utc)
+        else:
+            sent = _dt.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if sent.tzinfo is None:
+                sent = sent.replace(tzinfo=_tz.utc)
+        return (_dt.now(_tz.utc) - sent).total_seconds()
+    except Exception:
+        return None
+
+
+async def _notify_jarvis_inbound_whatsapp(incoming_message, target_record=None):
+    """Emit a notification and optionally wake JARVIS to announce a new inbound WhatsApp.
+
+    Heavily guarded against the message burst OpenWA replays on session connect:
+    deduplicates by message_id, ignores old messages, and rate-limits the live
+    voice announcement so it never floods the Gemini Live session.
+    """
+    global _last_whatsapp_voice_announce_at
+
+    if not _env_bool("JARVIS_WHATSAPP_NOTIFY_INBOUND", True):
+        return
+
+    channel = str(incoming_message.get("channel") or "whatsapp").lower()
+    if channel != "whatsapp":
+        return
+
+    # Deduplicate: never announce the same message_id twice (handles reconnect replays)
+    message_id = str(incoming_message.get("message_id") or "").strip()
+    if message_id:
+        if message_id in _announced_whatsapp_ids:
+            return
+        _announced_whatsapp_ids.add(message_id)
+        # Bound the set so it doesn't grow forever
+        if len(_announced_whatsapp_ids) > 2000:
+            _announced_whatsapp_ids.clear()
+            _announced_whatsapp_ids.add(message_id)
+
+    # Ignore old messages (the burst replayed when the WhatsApp session connects).
+    # Only genuinely recent messages should trigger a notification.
+    max_age = float(os.getenv("JARVIS_WHATSAPP_INBOUND_MAX_AGE_SECONDS", "120") or 120)
+    age = _message_age_seconds(incoming_message)
+    if age is not None and age > max_age:
+        return
+
+    display = (
+        (target_record or {}).get("display_name")
+        or incoming_message.get("display_target")
+        or incoming_message.get("sender")
+        or incoming_message.get("target")
+        or "Desconocido"
+    )
+    body = str(incoming_message.get("message") or "").strip()
+    preview = body[:80]
+    notification_text = f"Nuevo WhatsApp de {display}." + (f" Dice: {preview}" if preview else "")
+
+    voice_announce = _env_bool("JARVIS_WHATSAPP_VOICE_ANNOUNCE_INBOUND", True)
+    session = getattr(audio_loop, "session", None) if audio_loop else None
+
+    # Rate-limit the live voice announcement (cooldown). If we announced very
+    # recently, fall back to a visual-only notification to avoid flooding Gemini.
+    cooldown = float(os.getenv("JARVIS_WHATSAPP_VOICE_ANNOUNCE_COOLDOWN_SECONDS", "12") or 12)
+    now = time.time()
+    can_voice = voice_announce and session and (now - _last_whatsapp_voice_announce_at) >= cooldown
+
+    if can_voice:
+        try:
+            _last_whatsapp_voice_announce_at = now
+            content_for_voice = body[:400]
+            await session.send(
+                input=(
+                    "[NOTIFICACION INTERNA DEL SISTEMA - NO es una peticion del usuario] "
+                    f"Acaba de entrar un mensaje de WhatsApp de {display}. "
+                    + (f'El mensaje dice: "{content_for_voice}". ' if content_for_voice else "El mensaje no tiene texto (puede ser una imagen o audio). ")
+                    + "Avisa al usuario en voz alta: di de quien es y lee o resume brevemente lo que dice. "
+                    "PROHIBIDO: no uses ninguna herramienta, no llames a openclaw_send_message, "
+                    "no envies ningun mensaje, no respondas al remitente por tu cuenta. Solo informa de lo que ha llegado."
+                ),
+                end_of_turn=True,
+            )
+            return
+        except Exception as exc:
+            print(f"[SERVER] Could not send WhatsApp inbound notification to JARVIS session: {exc}")
+
+    # Visual-only notification (cooldown active, voice disabled, or no live session)
+    await sio.emit("transcription", {"sender": "JARVIS", "text": notification_text, "append": False})
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp provider endpoints (/api/whatsapp/*)
+# These work regardless of the configured provider.
+# ---------------------------------------------------------------------------
+
+@app.get("/api/whatsapp/provider")
+async def api_whatsapp_provider():
+    provider = _whatsapp_provider()
+    return _api_success({
+        "provider": provider,
+        "openwa_enabled": openwa_bridge.is_enabled(),
+        "openclaw_enabled": openclaw_bridge.is_enabled(),
+    })
+
+@app.get("/api/whatsapp/status")
+async def api_whatsapp_status():
+    provider = _whatsapp_provider()
+    if provider == "openwa":
+        status = await openwa_bridge.check_status()
+        return _api_success({
+            **status,
+            "provider": "openwa",
+            "success": status.get("available", False),
+        })
+    # Fallback: return openclaw status with whatsapp label
+    result = await openclaw_bridge.check_status()
+    return _api_from_openclaw_result(result)
+
+@app.post("/api/whatsapp/session/create")
+async def api_whatsapp_session_create(data: dict = Body(default={})):
+    name = data.get("name") or os.getenv("JARVIS_OPENWA_SESSION_ID", "jarvis-main")
+    result = await openwa_bridge.create_session(name=name)
+    return _api_success(result) if result.get("success") else _api_error(
+        result.get("summary") or "No se pudo crear la sesión OpenWA.",
+        data=result,
+    )
+
+@app.post("/api/whatsapp/session/start")
+async def api_whatsapp_session_start(data: dict = Body(default={})):
+    session_id = data.get("session_id") or os.getenv("JARVIS_OPENWA_SESSION_ID", "jarvis-main")
+    result = await openwa_bridge.start_session(session_id=session_id)
+    return _api_success(result) if result.get("success") else _api_error(
+        result.get("summary") or "No se pudo iniciar la sesión OpenWA.",
+        data=result,
+    )
+
+@app.get("/api/whatsapp/session/qr")
+async def api_whatsapp_session_qr(session_id: str = None):
+    sid = session_id or os.getenv("JARVIS_OPENWA_SESSION_ID", "jarvis-main")
+    result = await openwa_bridge.get_qr(session_id=sid)
+    return _api_success(result) if result.get("success") else _api_error(
+        result.get("summary") or "No se pudo obtener el QR de OpenWA.",
+        data=result,
+    )
+
+@app.get("/api/whatsapp/messages")
+async def api_whatsapp_messages(limit: int = 30, unread_only: bool = False):
+    messages = openclaw_messages_manager.list_messages(
+        channel="whatsapp", unread_only=unread_only, limit=limit
+    )
+    unread_count = openclaw_messages_manager.get_unread_count(channel="whatsapp")
+    return _api_success({"messages": messages, "unread_count": unread_count})
+
+@app.post("/api/whatsapp/messages/mark-read")
+async def api_whatsapp_messages_mark_read(data: dict = Body(default={})):
+    changed = openclaw_messages_manager.mark_read(
+        message_ids=data.get("message_ids"),
+        channel="whatsapp",
+        target=data.get("target"),
+    )
+    unread_count = openclaw_messages_manager.get_unread_count(channel="whatsapp")
+    return _api_success({"marked_read": len(changed), "unread_count": unread_count})
+
+@app.post("/api/whatsapp/send")
+async def api_whatsapp_send(data: dict = Body(default={})):
+    payload = _build_send_payload_from_request(data)
+    if not payload or not payload.get("message"):
+        return _api_error("Falta target o mensaje.", warnings=["invalid_request"])
+    allowed, target_record = _allowed_whatsapp_target_for_payload(payload)
+    if not allowed:
+        return _api_error(
+            f"{(target_record or {}).get('display_name') or payload.get('target') or 'Ese destino'} no esta en la allowlist.",
+            warnings=["not_allowed"],
+        )
+    pending = pending_actions_manager.create_pending_action(
+        "send_message",
+        payload,
+        _openclaw_human_summary("send_message", payload),
+    )
+    await dispatch_automation_event(
+        "pending_action.created",
+        {"pending_action": pending, "source": "api_whatsapp_send", "payload": payload},
+    )
+    return _api_success({"pending_action_id": pending["id"], "pending_action": pending})
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp contacts and groups from OpenWA session
+# ---------------------------------------------------------------------------
+
+def _openwa_phone_to_canonical(contact_id: str) -> str:
+    """Convert '34600111222@c.us' to '+34600111222'."""
+    phone = str(contact_id or "").split("@")[0].strip()
+    if phone and not phone.startswith("+"):
+        phone = f"+{phone}"
+    return phone
+
+@app.get("/api/whatsapp/contacts")
+async def api_whatsapp_contacts():
+    result = await openwa_bridge.get_contacts()
+    return _api_success(result) if result.get("success") else _api_error(
+        result.get("summary") or "No se pudieron obtener los contactos de OpenWA.",
+        data=result,
+    )
+
+@app.post("/api/whatsapp/contacts/sync")
+async def api_whatsapp_contacts_sync(data: dict = Body(default={})):
+    """Import contacts from the active OpenWA session into the local JARVIS agenda."""
+    result = await openwa_bridge.get_contacts()
+    if not result.get("success"):
+        return _api_error(result.get("summary") or "No se pudieron obtener los contactos.", data=result)
+
+    contacts = result.get("contacts") or []
+    added = updated = skipped = 0
+
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        cid = str(contact.get("id") or "").strip()
+        if not cid.endswith("@c.us"):
+            continue  # skip groups and broadcast lists
+        name = (contact.get("name") or contact.get("pushName") or "").strip()
+        if not name:
+            continue
+        canonical = _openwa_phone_to_canonical(cid)
+        if not canonical or canonical == "+":
+            continue
+
+        existing = openclaw_targets_manager.find_by_canonical_target("whatsapp", canonical)
+        if existing:
+            skipped += 1
+            continue
+
+        openclaw_targets_manager.add_target(
+            channel="whatsapp",
+            kind="user",
+            display_name=name,
+            raw_target=canonical,
+            canonical_target=canonical,
+            resolved=True,
+            allowed=True,
+            source="openwa_sync",
+        )
+        added += 1
+
+    _sync_openclaw_whatsapp_allowlist_best_effort(force=True)
+    return _api_success({
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "total_from_openwa": len(contacts),
+        "summary": f"Sync completado: {added} añadidos, {skipped} ya existían.",
+    })
+
+@app.get("/api/whatsapp/groups")
+async def api_whatsapp_groups():
+    result = await openwa_bridge.get_groups()
+    return _api_success(result) if result.get("success") else _api_error(
+        result.get("summary") or "No se pudieron obtener los grupos de OpenWA.",
+        data=result,
+    )
+
+@app.post("/api/whatsapp/groups/sync")
+async def api_whatsapp_groups_sync(data: dict = Body(default={})):
+    """Import groups from the active OpenWA session into the local JARVIS agenda."""
+    result = await openwa_bridge.get_groups()
+    if not result.get("success"):
+        return _api_error(result.get("summary") or "No se pudieron obtener los grupos.", data=result)
+
+    groups = result.get("groups") or []
+    added = skipped = 0
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        gid = str(group.get("id") or "").strip()
+        if not gid.endswith("@g.us"):
+            continue
+        name = (group.get("name") or group.get("subject") or "").strip()
+        if not name:
+            name = gid
+
+        existing = openclaw_targets_manager.find_by_canonical_target("whatsapp", gid)
+        if existing:
+            skipped += 1
+            continue
+
+        openclaw_targets_manager.add_target(
+            channel="whatsapp",
+            kind="group",
+            display_name=name,
+            raw_target=gid,
+            canonical_target=gid,
+            resolved=True,
+            allowed=True,
+            source="openwa_sync",
+        )
+        added += 1
+
+    _sync_openclaw_whatsapp_allowlist_best_effort(force=True)
+    return _api_success({
+        "added": added,
+        "skipped": skipped,
+        "total_from_openwa": len(groups),
+        "summary": f"Sync completado: {added} grupos añadidos, {skipped} ya existían.",
+    })
+
+@app.post("/api/whatsapp/send-image")
+async def api_whatsapp_send_image(data: dict = Body(default={})):
+    """Create a pending action to send a WhatsApp image. Requires confirmation."""
+    payload = _build_send_payload_from_request(data)
+    if not payload:
+        return _api_error("Falta target para enviar la imagen.", warnings=["invalid_request"])
+    image_url = data.get("image_url") or data.get("url")
+    base64_data = data.get("base64")
+    if not image_url and not base64_data:
+        return _api_error("Falta image_url o base64 para la imagen.", warnings=["invalid_request"])
+
+    payload["action_type"] = "send_image"
+    payload["image_url"] = image_url
+    payload["base64"] = base64_data
+    payload["mimetype"] = data.get("mimetype", "image/jpeg")
+    payload["caption"] = data.get("caption") or data.get("message") or ""
+    payload["message"] = payload["caption"] or "[imagen]"
+
+    allowed, target_record = _allowed_whatsapp_target_for_payload(payload)
+    if not allowed:
+        return _api_error(
+            f"{(target_record or {}).get('display_name') or payload.get('target') or 'Ese destino'} no esta en la allowlist.",
+            warnings=["not_allowed"],
+        )
+    pending = pending_actions_manager.create_pending_action(
+        "send_image",
+        payload,
+        f"Enviar imagen a {payload.get('display_target') or payload.get('target')}"
+        + (f": {payload['caption']}" if payload.get("caption") else ""),
+    )
+    await dispatch_automation_event(
+        "pending_action.created",
+        {"pending_action": pending, "source": "api_whatsapp_send_image", "payload": payload},
+    )
+    return _api_success({"pending_action_id": pending["id"], "pending_action": pending})
+
 
 @sio.event
 async def connect(sid, environ):

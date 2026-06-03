@@ -29,6 +29,10 @@ import {
     getCalendarSortValue,
     getOpenClawEvents,
     getOpenClawStatus,
+    getWhatsAppStatus,
+    getWhatsAppProvider,
+    getWhatsAppMessages,
+    markWhatsAppMessagesRead,
     getPendingActions,
     getProjects,
     getProjectTree,
@@ -120,6 +124,8 @@ function App() {
     const [calendarEvents, setCalendarEvents] = useState([]);
     const [pendingActions, setPendingActions] = useState([]);
     const [openClawEvents, setOpenClawEvents] = useState([]);
+    const [whatsappMessages, setWhatsappMessages] = useState([]);
+    const [unreadWhatsappCount, setUnreadWhatsappCount] = useState(0);
     const [integrationStatuses, setIntegrationStatuses] = useState([]);
     const [dashboardLoading, setDashboardLoading] = useState({});
     const [dashboardError, setDashboardError] = useState({});
@@ -333,6 +339,21 @@ function App() {
         return response;
     }, [setDashboardSectionError, setDashboardSectionLoading]);
 
+    const refreshWhatsAppMessages = useCallback(async () => {
+        setDashboardSectionLoading('activity', true);
+        const response = await getWhatsAppMessages(30);
+        if (response.ok && response.success) {
+            const body = response.data || {};
+            setWhatsappMessages(body.messages || []);
+            setUnreadWhatsappCount(body.unread_count || 0);
+            setDashboardSectionError('activity', null);
+        } else {
+            setDashboardSectionError('activity', responseError(response, 'Mensajes no disponibles'));
+        }
+        setDashboardSectionLoading('activity', false);
+        return response;
+    }, [setDashboardSectionError, setDashboardSectionLoading]);
+
     const refreshProjects = useCallback(async () => {
         setDashboardSectionLoading('projects', true);
         const response = await getProjects();
@@ -390,11 +411,13 @@ function App() {
 
     const refreshIntegrationStatuses = useCallback(async () => {
         setDashboardSectionLoading('integrations', true);
-        const [backendRes, openClawRes, calendarRes, linkedinRes] = await Promise.all([
+        const [backendRes, openClawRes, calendarRes, linkedinRes, whatsappProviderRes, whatsappStatusRes] = await Promise.all([
             getBackendStatus(),
             getOpenClawStatus(),
             listCalendarEvents(1),
             prepareLinkedInPost('Comprobación de estado de Jarvis. No publicar.'),
+            getWhatsAppProvider(),
+            getWhatsAppStatus(),
         ]);
 
         setBackendStatus(backendRes);
@@ -409,6 +432,14 @@ function App() {
             linkedinRes?.data?.raw?.json?.raw?.configured ||
             linkedinRes?.data?.raw?.raw?.configured
         );
+
+        const whatsappProvider = whatsappProviderRes?.data?.provider || 'openclaw';
+        const whatsappOnline = whatsappProvider === 'openwa'
+            ? Boolean(whatsappStatusRes?.data?.available || whatsappStatusRes?.data?.success)
+            : Boolean(openClawRes.success);
+        const whatsappMeta = whatsappProvider === 'openwa'
+            ? (whatsappOnline ? 'OpenWA OK' : 'OpenWA Offline')
+            : (whatsappOnline ? 'OK' : 'Offline');
 
         setIntegrationStatuses([
             {
@@ -440,10 +471,11 @@ function App() {
             {
                 name: 'WhatsApp',
                 shortName: 'WA',
-                state: openClawRes.success ? 'connected' : 'error',
-                meta: openClawRes.success ? 'OK' : 'Offline',
-                shortStatus: openClawRes.success ? 'OK' : 'Offline',
-                tone: openClawRes.success ? 'green' : '',
+                state: whatsappOnline ? 'connected' : 'error',
+                meta: whatsappMeta,
+                shortStatus: whatsappOnline ? 'OK' : 'Offline',
+                tone: whatsappOnline ? 'green' : '',
+                provider: whatsappProvider,
             },
         ]);
         setDashboardSectionLoading('integrations', false);
@@ -455,6 +487,7 @@ function App() {
         refreshCalendarEvents();
         refreshPendingActions();
         refreshOpenClawEvents();
+        refreshWhatsAppMessages();
         refreshIntegrationStatuses();
         refreshProjects();
         refreshAutomations();
@@ -465,7 +498,7 @@ function App() {
         }, DASHBOARD_POLL_INTERVALS.backend);
         const calendarTimer = setInterval(refreshCalendarEvents, DASHBOARD_POLL_INTERVALS.calendar);
         const pendingTimer = setInterval(refreshPendingActions, DASHBOARD_POLL_INTERVALS.pending);
-        const activityTimer = setInterval(refreshOpenClawEvents, DASHBOARD_POLL_INTERVALS.activity);
+        const activityTimer = setInterval(refreshWhatsAppMessages, DASHBOARD_POLL_INTERVALS.activity);
         const projectsTimer = setInterval(refreshProjects, DASHBOARD_POLL_INTERVALS.projects);
         const automationsTimer = setInterval(refreshAutomations, DASHBOARD_POLL_INTERVALS.automations);
 
@@ -483,6 +516,7 @@ function App() {
         refreshCalendarEvents,
         refreshIntegrationStatuses,
         refreshOpenClawEvents,
+        refreshWhatsAppMessages,
         refreshOpenClawStatus,
         refreshPendingActions,
         refreshProjects,
@@ -847,6 +881,18 @@ function App() {
             setPrinterCount(list.length);
         });
 
+        socket.on('whatsapp_inbound_message', (data) => {
+            const msg = data?.message;
+            const count = data?.unread_count ?? 0;
+            if (msg) {
+                setWhatsappMessages(prev => {
+                    const exists = prev.some(m => m.id === msg.id);
+                    return exists ? prev : [msg, ...prev];
+                });
+            }
+            setUnreadWhatsappCount(count);
+        });
+
         socket.on('simulation_status', (state) => {
             setSimulationState(state || { simulation_mode: false, kasa_simulation: false, printer_simulation: false });
             if (state?.simulation_mode) {
@@ -962,6 +1008,7 @@ function App() {
             socket.off('connect');
             socket.off('disconnect');
             socket.off('status');
+            socket.off('whatsapp_inbound_message');
             socket.off('audio_data');
             socket.off('cad_data');
             socket.off('cad_thought');
@@ -2067,7 +2114,8 @@ function App() {
         agenda: calendarEvents,
         pendingActions,
         integrations: integrationStatuses,
-        recentActivity: openClawEvents,
+        recentActivity: whatsappMessages,
+        unreadWhatsappCount,
         capabilities: [
             {
                 id: 'voice',
@@ -2241,7 +2289,8 @@ function App() {
                 audioLevel={audioAmp}
                 onRefreshCalendar={refreshCalendarEvents}
                 onRefreshPending={refreshPendingActions}
-                onRefreshActivity={refreshOpenClawEvents}
+                onRefreshActivity={refreshWhatsAppMessages}
+                onMarkAllRead={async () => { await markWhatsAppMessagesRead(); await refreshWhatsAppMessages(); }}
                 onRefreshIntegrations={refreshIntegrationStatuses}
                 onRefreshProjects={refreshProjects}
                 onRefreshAutomations={refreshAutomations}

@@ -64,6 +64,7 @@ const JarvisDashboard = ({
     onRefreshCalendar,
     onRefreshPending,
     onRefreshActivity,
+    onMarkAllRead,
     onRefreshIntegrations,
     onConfirmPending,
     onCancelPending,
@@ -95,6 +96,7 @@ const JarvisDashboard = ({
     const pendingActions = dashboardData?.pendingActions || [];
     const integrations = dashboardData?.integrations || [];
     const recentActivity = dashboardData?.recentActivity || [];
+    const unreadWhatsappCount = dashboardData?.unreadWhatsappCount || 0;
     const capabilities = dashboardData?.capabilities || [];
     const loading = dashboardData?.loading || {};
     const errors = dashboardData?.errors || {};
@@ -221,7 +223,7 @@ const JarvisDashboard = ({
             return (
                 <>
                     <TasksPanel actions={pendingActions} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
-                    <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
+                    <RecentActivity items={recentActivity} unreadCount={unreadWhatsappCount} onRefresh={onRefreshActivity} onMarkAllRead={onMarkAllRead} loading={loading.activity} error={errors.activity} />
                 </>
             );
         }
@@ -244,7 +246,7 @@ const JarvisDashboard = ({
             return (
                 <>
                     <IntegrationsPanel integrations={integrations} onManage={() => onQuickAction('manage-integrations')} onRefresh={onRefreshIntegrations} loading={loading.integrations} />
-                    <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
+                    <RecentActivity items={recentActivity} unreadCount={unreadWhatsappCount} onRefresh={onRefreshActivity} onMarkAllRead={onMarkAllRead} loading={loading.activity} error={errors.activity} />
                 </>
             );
         }
@@ -290,7 +292,7 @@ const JarvisDashboard = ({
         }
 
         if (activeModule === 'system') {
-            return <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />;
+            return <RecentActivity items={recentActivity} unreadCount={unreadWhatsappCount} onRefresh={onRefreshActivity} onMarkAllRead={onMarkAllRead} loading={loading.activity} error={errors.activity} />;
         }
 
         if (activeModule === 'settings') {
@@ -307,7 +309,7 @@ const JarvisDashboard = ({
             <>
                 <AgendaPanel events={homeAgenda} dateLabel={dateLabel} onRefresh={onRefreshCalendar} loading={loading.calendar} error={errors.calendar} />
                 <TasksPanel actions={pendingActions} onConfirm={onConfirmPending} onCancel={onCancelPending} loading={loading.pending} error={errors.pending} />
-                <RecentActivity items={recentActivity} onRefresh={onRefreshActivity} loading={loading.activity} error={errors.activity} />
+                <RecentActivity items={recentActivity} unreadCount={unreadWhatsappCount} onRefresh={onRefreshActivity} onMarkAllRead={onMarkAllRead} loading={loading.activity} error={errors.activity} />
             </>
         );
     };

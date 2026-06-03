@@ -1,6 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from 'lucide-react';
-import { getCalendarDateKey } from '../../../services/jarvisDashboardApi';
+import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, KeyRound, RefreshCw } from 'lucide-react';
+import { getCalendarDateKey, reauthGoogleCalendar } from '../../../services/jarvisDashboardApi';
+
+const looksLikeTokenExpired = (msg) => {
+    const text = String(msg || '').toLowerCase();
+    return text.includes('caducado') || text.includes('invalid_grant') || text.includes('expired') || text.includes('revoked') || text.includes('google_token');
+};
 
 const sameDay = (value, date) => {
     if (!value || !date) return false;
@@ -11,7 +16,25 @@ const sameDay = (value, date) => {
 
 const CalendarModule = ({ context, actions }) => {
     const [selectedDate, setSelectedDate] = useState(new Date());
+    const [reauthing, setReauthing] = useState(false);
+    const [reauthMsg, setReauthMsg] = useState('');
     const { calendarEvents, loading, errors } = context;
+
+    const needsReauth = looksLikeTokenExpired(errors.calendar);
+
+    const handleReauth = async () => {
+        setReauthing(true);
+        setReauthMsg('Abriendo el navegador para reconectar Google Calendar. Acepta los permisos...');
+        const res = await reauthGoogleCalendar();
+        if (res.success) {
+            setReauthMsg('Google Calendar reconectado. Actualizando agenda...');
+            await actions.onRefreshCalendar();
+            setReauthMsg('');
+        } else {
+            setReauthMsg(res.error || 'No se pudo reconectar. Inténtalo de nuevo.');
+        }
+        setReauthing(false);
+    };
 
     const days = useMemo(() => {
         const first = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
@@ -44,7 +67,22 @@ const CalendarModule = ({ context, actions }) => {
                 </div>
             </div>
 
-            {errors.calendar && <div className="jarvis-soft-error">{errors.calendar}</div>}
+            {errors.calendar && !needsReauth && <div className="jarvis-soft-error">{errors.calendar}</div>}
+            {needsReauth && (
+                <div className="jarvis-soft-error" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                    <span>El acceso a Google Calendar ha caducado. Reconecta tu cuenta para volver a ver la agenda.</span>
+                    <button
+                        type="button"
+                        className="jarvis-module-button"
+                        disabled={reauthing}
+                        onClick={handleReauth}
+                        style={{ flexShrink: 0 }}
+                    >
+                        <KeyRound size={14} /> {reauthing ? 'Reconectando...' : 'Reconectar Google Calendar'}
+                    </button>
+                </div>
+            )}
+            {reauthMsg && <div className="jarvis-muted-line">{reauthMsg}</div>}
             {loading.calendar && <div className="jarvis-empty-state compact">Cargando agenda real...</div>}
 
             <div className="jarvis-calendar-layout">

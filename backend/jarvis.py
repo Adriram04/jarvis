@@ -326,6 +326,16 @@ openclaw_tools = [
         ["channel", "target", "message"],
     ),
     _openclaw_tool(
+        "openclaw_send_image",
+        "Queues or sends an image via WhatsApp. Use image_url for a public image URL, or omit to use the current webcam frame. Requires confirmation before sending.",
+        {
+            "target": {"type": "STRING", "description": "WhatsApp contact or group name."},
+            "image_url": {"type": "STRING", "description": "Public URL of the image to send. Leave empty to use the current camera frame."},
+            "caption": {"type": "STRING", "description": "Optional caption for the image."},
+        },
+        ["target"],
+    ),
+    _openclaw_tool(
         "openclaw_read_conversation",
         "Reads recent messages from a configured conversation if available. Do not use for WhatsApp; WhatsApp inbound messages are read from Jarvis' local inbound store.",
         {
@@ -1264,6 +1274,8 @@ class AudioLoop:
                 )
             else:
                 blocked_whatsapp = self._blocked_whatsapp_openclaw_tool_result(name, args)
+                if blocked_whatsapp is None and name == "openclaw_send_image":
+                    blocked_whatsapp = self._queue_whatsapp_image_from_tool(args)
                 if blocked_whatsapp:
                     result = blocked_whatsapp
                 elif name == "openclaw_check_status":
@@ -1273,7 +1285,7 @@ class AudioLoop:
                     result = self._openclaw_local_result(
                         "get_pending_actions",
                         f"{len(actions)} accion(es) pendiente(s).",
-                        raw=actions,
+                        raw=self._sanitize_actions_for_model(actions),
                     )
                 elif name == "confirm_pending_action":
                     result = await self._confirm_pending_openclaw_action(args.get("action_id"))
@@ -1434,6 +1446,17 @@ class AudioLoop:
         payload = dict(payload or {})
         payload.setdefault("confirmed", True)
         external_payload = {key: value for key, value in payload.items() if not str(key).startswith("_")}
+
+        # Route WhatsApp sends to OpenWA when JARVIS_WHATSAPP_PROVIDER=openwa.
+        # This mirrors the routing in server.py so voice confirmations also use OpenWA.
+        _whatsapp_actions = {"send_message", "send_whatsapp_message", "send_channel_message", "autopilot_reply", "send_image", "send_whatsapp_image", "openclaw_send_image"}
+        if action_type in _whatsapp_actions:
+            channel = str(external_payload.get("channel") or "whatsapp").strip().lower()
+            provider = os.getenv("JARVIS_WHATSAPP_PROVIDER", "openclaw").strip().lower()
+            if channel == "whatsapp" and provider == "openwa":
+                from integrations.openwa_bridge import openwa_bridge as _openwa_bridge
+                return await _openwa_bridge.execute_action(action_type, external_payload)
+
         return await self.openclaw_bridge.execute_action(action_type, external_payload)
 
     async def _confirm_pending_openclaw_action(self, action_id):
@@ -1741,14 +1764,111 @@ class AudioLoop:
 
         summary = f"He preparado el WhatsApp para {display_target}: '{message}'. Confirmalo para enviarlo."
         self._remember_model_output_text(summary)
+        # Suppress Gemini audio/text response to avoid duplicate — JARVIS already communicated this
+        self._suppress_model_output_until = max(
+            getattr(self, "_suppress_model_output_until", 0.0),
+            time.time() + 8.0,
+        )
+        self.clear_audio_queue()
         transcription_callback = getattr(self, "on_transcription", None)
         if transcription_callback and not existing:
             transcription_callback({"sender": "JARVIS", "text": summary, "append": False})
         return self._openclaw_local_result(
             action_norm,
-            summary,
+            "Pending action created. User already notified. No additional response needed.",
             success=False,
             raw=pending,
+            warnings=["confirmation_required", "whatsapp_local_pending_action"],
+        )
+
+    def _queue_whatsapp_image_from_tool(self, args):
+        """Create a pending action for sending a WhatsApp image (called from Gemini tool)."""
+        args = args or {}
+        target_text = str(args.get("target") or "").strip()
+        image_url = str(args.get("image_url") or "").strip()
+        caption = str(args.get("caption") or "").strip()
+
+        if not target_text:
+            return self._openclaw_local_result(
+                "openclaw_send_image",
+                "Falta el contacto de destino para enviar la imagen.",
+                success=False,
+                warnings=["invalid_whatsapp_tool_payload"],
+            )
+
+        target = None
+        manager = getattr(self, "openclaw_targets_manager", None)
+        if manager:
+            target = manager.find_best_match("whatsapp", target_text)
+
+        if target:
+            canonical_target = target.get("canonical_target") or target.get("raw_target")
+            display_target = target.get("display_name") or target_text
+            kind = target.get("kind", "user")
+            target_id = target.get("id")
+        elif self._looks_like_phone_target(target_text):
+            canonical_target = self._normalize_direct_phone_target(target_text)
+            display_target = target_text
+            kind = "user"
+            target_id = None
+        else:
+            return self._openclaw_local_result(
+                "openclaw_send_image",
+                f"No tengo guardado el contacto '{target_text}'. Importalo o crealo antes de enviar.",
+                success=False,
+                warnings=["whatsapp_target_not_found"],
+            )
+
+        pending_manager = getattr(self, "pending_actions_manager", None)
+        if not pending_manager:
+            return self._openclaw_local_result(
+                "openclaw_send_image",
+                "No hay gestor de acciones pendientes disponible.",
+                success=False,
+                warnings=["whatsapp_local_flow_required"],
+            )
+
+        send_payload = {
+            "channel": "whatsapp",
+            "kind": kind,
+            "target": canonical_target,
+            "canonical_target": canonical_target,
+            "display_target": display_target,
+            "target_id": target_id,
+            "image_url": image_url or None,
+            "caption": caption,
+            "message": caption or "[imagen]",
+        }
+        pending = pending_manager.create_pending_action(
+            "send_image",
+            send_payload,
+            f"Enviar imagen a {display_target}" + (f": {caption}" if caption else ""),
+        )
+
+        tool_confirmation_callback = getattr(self, "on_tool_confirmation", None)
+        if tool_confirmation_callback:
+            tool_confirmation_callback({
+                "id": pending.get("id"),
+                "tool": "send_image",
+                "args": send_payload,
+            })
+
+        summary = f"He preparado la imagen para {display_target}." + (f" Caption: '{caption}'." if caption else "") + " Confírmalo para enviarla."
+        self._remember_model_output_text(summary)
+        self._suppress_model_output_until = max(
+            getattr(self, "_suppress_model_output_until", 0.0),
+            time.time() + 8.0,
+        )
+        self.clear_audio_queue()
+        transcription_callback = getattr(self, "on_transcription", None)
+        if transcription_callback:
+            transcription_callback({"sender": "JARVIS", "text": summary, "append": False})
+
+        return self._openclaw_local_result(
+            "openclaw_send_image",
+            "Image pending action created. User already notified. No additional response needed.",
+            success=False,
+            raw={"id": pending.get("id"), "display_target": display_target},
             warnings=["confirmation_required", "whatsapp_local_pending_action"],
         )
 
@@ -1756,6 +1876,29 @@ class AudioLoop:
         if not rule:
             return self._openclaw_local_result(action_type, "No encuentro esa regla.", success=False, warnings=["not_found"])
         return self._openclaw_local_result(action_type, f"Regla {label}.", raw=rule)
+
+    def _sanitize_actions_for_model(self, actions):
+        """Strip heavy/binary fields (base64 images, raw blobs) from pending
+        actions before sending them to the Gemini Live API. Large base64 strings
+        cause the Live websocket to reject the tool response with error 1007."""
+        import copy as _copy
+        HEAVY_KEYS = {"base64", "image_base64", "data", "media", "raw_openclaw", "raw"}
+        sanitized = []
+        for action in (actions or []):
+            try:
+                clean = _copy.deepcopy(action)
+            except Exception:
+                clean = dict(action) if isinstance(action, dict) else action
+            payload = clean.get("payload") if isinstance(clean, dict) else None
+            if isinstance(payload, dict):
+                for key in list(payload.keys()):
+                    value = payload[key]
+                    if key in HEAVY_KEYS and value:
+                        payload[key] = "[omitido]"
+                    elif isinstance(value, str) and len(value) > 500:
+                        payload[key] = value[:200] + "...[truncado]"
+            sanitized.append(clean)
+        return sanitized
 
     def _openclaw_local_result(self, action_type, summary, success=True, raw=None, warnings=None):
         return {

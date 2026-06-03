@@ -549,9 +549,13 @@ class OpenClawBridge:
             args.extend(["--params", json.dumps(params or {}, ensure_ascii=False)])
         if timeout_ms is not None:
             args.extend(["--timeout", str(timeout_ms)])
-        if self.gateway_url:
+        # OpenClaw only accepts a --url override when explicit credentials are
+        # also supplied. For a local gateway, omit --url so the CLI uses the
+        # local config (~/.openclaw/openclaw.json) and its credentials.
+        if self.gateway_url and self.gateway_token:
             args.extend(["--url", self.gateway_url])
-        if self.gateway_token:
+            args.extend(["--token", self.gateway_token])
+        elif self.gateway_token:
             args.extend(["--token", self.gateway_token])
         if expect_final:
             args.append("--expect-final")

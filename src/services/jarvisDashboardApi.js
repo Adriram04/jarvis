@@ -48,6 +48,42 @@ export const getBackendStatus = () => requestJson('/status');
 
 export const getOpenClawStatus = () => requestJson('/api/openclaw/status');
 
+export const reauthGoogleCalendar = () => requestJson('/api/calendar/reauth', { method: 'POST', body: '{}' });
+
+export const getWhatsAppStatus = () => requestJson('/api/whatsapp/status');
+
+export const getWhatsAppProvider = () => requestJson('/api/whatsapp/provider');
+
+export const getWhatsAppMessages = (limit = 30, unreadOnly = false) =>
+    requestJson(`/api/whatsapp/messages?limit=${limit}&unread_only=${unreadOnly}`);
+
+export const markWhatsAppMessagesRead = (messageIds = null) =>
+    requestJson('/api/whatsapp/messages/mark-read', {
+        method: 'POST',
+        body: JSON.stringify({ message_ids: messageIds }),
+    });
+
+export const getWhatsAppContacts = () => requestJson('/api/whatsapp/contacts');
+
+export const syncWhatsAppContacts = () =>
+    requestJson('/api/whatsapp/contacts/sync', { method: 'POST', body: JSON.stringify({}) });
+
+export const getWhatsAppGroups = () => requestJson('/api/whatsapp/groups');
+
+export const syncWhatsAppGroups = () =>
+    requestJson('/api/whatsapp/groups/sync', { method: 'POST', body: JSON.stringify({}) });
+
+export const sendWhatsAppImage = (target, imageUrl, caption = '', canonicalTarget = null) =>
+    requestJson('/api/whatsapp/send-image', {
+        method: 'POST',
+        body: JSON.stringify({
+            target,
+            canonical_target: canonicalTarget || target,
+            image_url: imageUrl,
+            caption,
+        }),
+    });
+
 export const getOpenClawEvents = (limit = 10) => requestJson(`/api/openclaw/events?limit=${encodeURIComponent(limit)}`);
 
 export const getPendingActions = () => requestJson('/api/pending-actions');
