@@ -14,6 +14,7 @@ import SimulationDashboard from './components/SimulationDashboard';
 import OpenClawDashboard from './components/OpenClawDashboard';
 import CalendarEventModal from './components/jarvis-dashboard/CalendarEventModal';
 import JarvisDashboard from './components/jarvis-dashboard/JarvisDashboard';
+import GlobalMusicPlayer from './components/jarvis-dashboard/GlobalMusicPlayer';
 import LinkedInPostModal from './components/jarvis-dashboard/LinkedInPostModal';
 import { formatPrinterState, isActivePrinterState, isFinishedOrIdlePrinterState } from './utils/printerStatus';
 import {
@@ -156,6 +157,9 @@ function App() {
     const [musicCommand, setMusicCommand] = useState(null);
     const [musicError, setMusicError] = useState(null);
     const [musicLoading, setMusicLoading] = useState(false);
+    const [musicDuckActive, setMusicDuckActive] = useState(false);
+    const jarvisSpeakingTsRef = useRef(0);
+    const micLevelRef = useRef(0);
 
 
     // RESTORED STATE
@@ -502,6 +506,27 @@ function App() {
         return response;
     }, [refreshMusicPreferences]);
 
+    // Keep a cheap, always-fresh mic level (0..1) for music ducking without re-renders.
+    useEffect(() => {
+        const len = micAudioData.length;
+        micLevelRef.current = len ? (micAudioData.reduce((a, b) => a + b, 0) / len / 255) : 0;
+    }, [micAudioData]);
+
+    // Music ducking: lower volume while the user talks or JARVIS is speaking.
+    // Uses a cooldown so it doesn't flicker between words.
+    useEffect(() => {
+        let lastActiveTs = 0;
+        const id = setInterval(() => {
+            const now = Date.now();
+            const jarvisTalking = now - jarvisSpeakingTsRef.current < 1000;
+            const userTalking = !isMuted && micLevelRef.current > 0.15;
+            if (jarvisTalking || userTalking) lastActiveTs = now;
+            const ducked = now - lastActiveTs < 1500;
+            setMusicDuckActive(prev => (prev === ducked ? prev : ducked));
+        }, 200);
+        return () => clearInterval(id);
+    }, [isMuted]);
+
     const loadProjectTree = useCallback(async (projectName) => {
         const name = String(projectName || '').trim();
         const requestId = projectTreeRequestRef.current + 1;
@@ -830,6 +855,7 @@ function App() {
         });
         socket.on('audio_data', (data) => {
             setAiAudioData(data.data);
+            jarvisSpeakingTsRef.current = Date.now(); // for music ducking
         });
         socket.on('auth_status', (data) => {
             console.log("Auth Status:", data);
@@ -2491,6 +2517,14 @@ function App() {
                 onDiscoverKasa={discoverKasaDevices}
                 onControlKasa={controlKasaDevice}
                 onRunWebAgent={runWebAgentPrompt}
+            />
+
+            <GlobalMusicPlayer
+                musicStatus={musicStatus}
+                musicCommand={musicCommand}
+                duckActive={musicDuckActive}
+                onMusicCommand={handleMusicCommand}
+                onRandomMusic={handleRandomMusic}
             />
 
             <CalendarEventModal
