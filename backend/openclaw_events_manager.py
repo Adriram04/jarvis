@@ -18,6 +18,7 @@ ALLOWED_EVENT_TYPES = {
     "automation.failed",
     "automation.waiting_for_confirmation",
     "automation.skipped_already_running",
+    "automation.skipped_conditions",
 }
 
 

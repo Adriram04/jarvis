@@ -19,6 +19,32 @@ body {
     scrollbar-width: none;
 }
 
+.custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.42) rgba(5, 7, 13, 0.22);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    border-radius: 999px;
+    background: rgba(5, 7, 13, 0.28);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    border: 2px solid rgba(5, 7, 13, 0.72);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(0, 229, 255, 0.68), rgba(0, 163, 255, 0.36));
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.24);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(0, 229, 255, 0.92), rgba(0, 163, 255, 0.58));
+}
+
 .mask-image-gradient {
   mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent);
 }

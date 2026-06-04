@@ -1,28 +1,37 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, Clock, Play, Plus, RefreshCw, ToggleLeft, ToggleRight, Trash2 } from 'lucide-react';
+import { Activity, Clock, History, Layers, Play, Plus, RefreshCw, Shield, ToggleLeft, ToggleRight, Trash2 } from 'lucide-react';
 
-const defaultWorkflow = {
-    steps: [
-        {
-            action_type: 'list_calendar_events',
-            payload: { max_results: 5 },
-            human_summary: 'Consultar los proximos eventos del calendario.',
-            stop_on_error: true,
-        },
-    ],
-};
+const defaultActions = [
+    {
+        action_type: 'summarize_day',
+        payload: {},
+        human_summary: 'Resumen del dia (agenda, mensajes y pendientes).',
+        stop_on_error: false,
+    },
+];
 
 const eventTypeOptions = [
-    'openclaw.inbound_message',
+    'whatsapp.message_received',
+    'openwa.connected',
+    'calendar.event_upcoming',
+    'printer.finished',
     'pending_action.created',
-    'automation.started',
-    'automation.completed',
-    'automation.failed',
+    'system.startup',
+    'openclaw.inbound_message',
     'camera.real_person_verified',
     'camera.deepfake_suspected',
-    'system.startup',
-    'printer.finished',
     'kasa.device_changed',
+];
+
+const conditionTypeOptions = [
+    'always',
+    'message_contains',
+    'sender_in_allowlist',
+    'provider_connected',
+    'time_between',
+    'has_calendar_events',
+    'project_active',
+    'simulation_enabled',
 ];
 
 const localDateTimeValue = (date = new Date(Date.now() + 60 * 60 * 1000)) => {
@@ -38,12 +47,25 @@ const getAutomation = (response) => (
     null
 );
 
+const scheduleKind = (trigger = {}) => trigger.schedule?.kind || trigger.kind || trigger.type;
+
 const describeTrigger = (trigger = {}) => {
-    if (trigger.type === 'once') return trigger.run_at ? `Una vez: ${new Date(trigger.run_at).toLocaleString('es-ES')}` : 'Una vez: sin fecha';
-    if (trigger.type === 'daily') return `Diaria: ${String(trigger.hour ?? 0).padStart(2, '0')}:${String(trigger.minute ?? 0).padStart(2, '0')}`;
-    if (trigger.type === 'interval') return `Intervalo: cada ${trigger.minutes || 0} min`;
-    if (trigger.type === 'event') return `Evento: ${trigger.event_type || 'sin tipo'}`;
-    return 'Manual';
+    const type = trigger.type;
+    if (type === 'manual') return 'Manual';
+    if (type === 'schedule' || ['daily', 'weekly', 'once', 'interval'].includes(type)) {
+        const schedule = trigger.schedule || trigger;
+        const kind = scheduleKind(trigger);
+        if (kind === 'once') return schedule.run_at ? `Una vez: ${new Date(schedule.run_at).toLocaleString('es-ES')}` : 'Una vez: sin fecha';
+        if (kind === 'daily') return `Diaria: ${String(schedule.hour ?? 0).padStart(2, '0')}:${String(schedule.minute ?? 0).padStart(2, '0')}`;
+        if (kind === 'weekly') {
+            const days = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
+            return `Semanal: ${days[schedule.weekday ?? 0]} ${String(schedule.hour ?? 0).padStart(2, '0')}:${String(schedule.minute ?? 0).padStart(2, '0')}`;
+        }
+        if (kind === 'interval') return `Intervalo: cada ${schedule.minutes || 0} min`;
+        return 'Programada';
+    }
+    // Event-name trigger.
+    return `Evento: ${type || 'sin tipo'}`;
 };
 
 const formatDate = (value, fallback = 'No programada') => {
@@ -53,30 +75,43 @@ const formatDate = (value, fallback = 'No programada') => {
     return date.toLocaleString('es-ES');
 };
 
-const stepList = (workflow = {}) => {
-    const steps = Array.isArray(workflow) ? workflow : workflow.steps;
+const actionList = (automation = {}) => {
+    if (Array.isArray(automation.actions)) return automation.actions;
+    const steps = automation.workflow?.steps;
     return Array.isArray(steps) ? steps : [];
 };
 
 const AutomationsModule = ({ context, actions }) => {
-    const { automations = [], automationsError, automationsLoading } = context;
+    const {
+        automations = [],
+        automationsHistory = [],
+        automationTemplates = [],
+        automationsError,
+        automationsLoading,
+    } = context;
+
     const [name, setName] = useState('');
+    const [description, setDescription] = useState('');
     const [triggerType, setTriggerType] = useState('daily');
     const [runAt, setRunAt] = useState(localDateTimeValue());
     const [dailyHour, setDailyHour] = useState('9');
     const [dailyMinute, setDailyMinute] = useState('0');
+    const [weekday, setWeekday] = useState('0');
     const [intervalMinutes, setIntervalMinutes] = useState('60');
     const [eventType, setEventType] = useState(eventTypeOptions[0]);
+    const [safetyPolicy, setSafetyPolicy] = useState('auto');
     const [enabled, setEnabled] = useState(true);
-    const [workflowText, setWorkflowText] = useState(JSON.stringify(defaultWorkflow, null, 2));
+    const [conditionsText, setConditionsText] = useState('[]');
+    const [actionsText, setActionsText] = useState(JSON.stringify(defaultActions, null, 2));
     const [notice, setNotice] = useState('');
     const [busyId, setBusyId] = useState('');
     const [creating, setCreating] = useState(false);
 
     useEffect(() => {
-        if (!automations.length) {
-            actions.onRefreshAutomations?.();
-        }
+        if (!automations.length) actions.onRefreshAutomations?.();
+        actions.onRefreshAutomationsHistory?.();
+        actions.onRefreshAutomationTemplates?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const sortedAutomations = useMemo(() => [...automations].sort((a, b) => {
@@ -85,38 +120,61 @@ const AutomationsModule = ({ context, actions }) => {
         return String(aNext).localeCompare(String(bNext));
     }), [automations]);
 
+    const enabledCount = sortedAutomations.filter(item => item.enabled).length;
+    const runningCount = sortedAutomations.filter(item => item.running).length;
+    const scheduledCount = sortedAutomations.filter(item => Boolean(item.next_run_at)).length;
+
     const buildTrigger = () => {
         if (triggerType === 'once') {
-            return { type: 'once', run_at: runAt ? new Date(runAt).toISOString() : null };
+            return { type: 'schedule', schedule: { kind: 'once', run_at: runAt ? new Date(runAt).toISOString() : null } };
         }
         if (triggerType === 'daily') {
-            return { type: 'daily', hour: Number(dailyHour || 0), minute: Number(dailyMinute || 0) };
+            return { type: 'schedule', schedule: { kind: 'daily', hour: Number(dailyHour || 0), minute: Number(dailyMinute || 0) } };
+        }
+        if (triggerType === 'weekly') {
+            return { type: 'schedule', schedule: { kind: 'weekly', weekday: Number(weekday || 0), hour: Number(dailyHour || 0), minute: Number(dailyMinute || 0) } };
         }
         if (triggerType === 'interval') {
-            return { type: 'interval', minutes: Number(intervalMinutes || 1) };
+            return { type: 'schedule', schedule: { kind: 'interval', minutes: Number(intervalMinutes || 1) } };
         }
         if (triggerType === 'event') {
-            return { type: 'event', event_type: eventType, filters: {} };
+            return { type: eventType, filters: {} };
         }
         return { type: 'manual' };
     };
 
+    const isEventTrigger = triggerType === 'event';
+
     const create = async (event) => {
         event.preventDefault();
         setNotice('');
-        let workflow;
+
+        let parsedActions;
         try {
-            workflow = JSON.parse(workflowText);
-        } catch {
-            setNotice('El workflow no es JSON valido.');
+            parsedActions = JSON.parse(actionsText);
+            if (!Array.isArray(parsedActions)) throw new Error('actions debe ser una lista');
+        } catch (err) {
+            setNotice('Las acciones no son un JSON valido (debe ser una lista).');
+            return;
+        }
+
+        let parsedConditions = [];
+        try {
+            parsedConditions = conditionsText.trim() ? JSON.parse(conditionsText) : [];
+            if (!Array.isArray(parsedConditions)) throw new Error('conditions debe ser una lista');
+        } catch (err) {
+            setNotice('Las condiciones no son un JSON valido (debe ser una lista).');
             return;
         }
 
         setCreating(true);
         const response = await actions.onCreateAutomation?.({
             name: name.trim(),
+            description: description.trim(),
             trigger: buildTrigger(),
-            workflow,
+            conditions: parsedConditions,
+            actions: parsedActions,
+            safety: { requires_confirmation: safetyPolicy },
             enabled: triggerType === 'manual' ? false : enabled,
         });
         setCreating(false);
@@ -124,6 +182,7 @@ const AutomationsModule = ({ context, actions }) => {
         const automation = getAutomation(response);
         if (response?.success && automation) {
             setName('');
+            setDescription('');
             setNotice(`Automatizacion creada: ${automation.name}`);
         } else {
             setNotice(response?.error || 'No se pudo crear la automatizacion.');
@@ -153,14 +212,24 @@ const AutomationsModule = ({ context, actions }) => {
         setNotice(response?.success ? 'Automatizacion eliminada.' : response?.error || 'No se pudo eliminar.');
     };
 
+    const applyTemplate = async (template) => {
+        setBusyId(template.id);
+        const response = await actions.onApplyAutomationTemplate?.(template.id);
+        setBusyId('');
+        setNotice(response?.success ? `Plantilla aplicada: ${template.name}` : response?.error || 'No se pudo aplicar la plantilla.');
+    };
+
     return (
         <section className="jarvis-module">
             <div className="jarvis-module-header">
                 <div>
-                    <span>Procesos reales de Jarvis</span>
+                    <span>Eventos, reglas, condiciones y acciones confirmables</span>
                     <h2>Automatizaciones</h2>
                 </div>
-                <button type="button" className="jarvis-module-button" onClick={actions.onRefreshAutomations}>
+                <button type="button" className="jarvis-module-button" onClick={() => {
+                    actions.onRefreshAutomations?.();
+                    actions.onRefreshAutomationsHistory?.();
+                }}>
                     <RefreshCw size={14} /> Actualizar
                 </button>
             </div>
@@ -168,73 +237,149 @@ const AutomationsModule = ({ context, actions }) => {
             {automationsError && <div className="jarvis-soft-error">{automationsError}</div>}
             {notice && <div className={notice.includes('No se') || notice.includes('JSON') ? 'jarvis-soft-error' : 'jarvis-soft-success'}>{notice}</div>}
 
-            <div className="jarvis-automations-layout">
-                <section className="jarvis-panel jarvis-automation-list">
-                    <div className="jarvis-panel-title">Automatizaciones guardadas</div>
-                    {automationsLoading && <div className="jarvis-empty-state compact">Cargando automatizaciones...</div>}
-                    {sortedAutomations.length === 0 && !automationsLoading && <div className="jarvis-empty-state">Sin automatizaciones.</div>}
+            <div className="jarvis-automation-overview">
+                <div className="jarvis-automation-metric">
+                    <Layers size={16} />
+                    <span>Guardadas</span>
+                    <strong>{sortedAutomations.length}</strong>
+                </div>
+                <div className="jarvis-automation-metric">
+                    <ToggleRight size={16} />
+                    <span>Activas</span>
+                    <strong>{enabledCount}</strong>
+                </div>
+                <div className="jarvis-automation-metric">
+                    <Clock size={16} />
+                    <span>Programadas</span>
+                    <strong>{scheduledCount}</strong>
+                </div>
+                <div className="jarvis-automation-metric">
+                    <Activity size={16} />
+                    <span>Ejecutando</span>
+                    <strong>{runningCount}</strong>
+                </div>
+            </div>
 
-                    {sortedAutomations.map(automation => {
-                        const steps = stepList(automation.workflow);
-                        const isBusy = busyId === automation.id;
-                        return (
-                            <article className="jarvis-automation-card" key={automation.id}>
-                                <div className="jarvis-automation-card-head">
-                                    <div>
-                                        <strong>{automation.name}</strong>
-                                        <span>{describeTrigger(automation.trigger)}</span>
-                                    </div>
-                                    <button type="button" disabled={isBusy} onClick={() => toggle(automation)} title={automation.enabled ? 'Desactivar' : 'Activar'}>
-                                        {automation.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
-                                        {automation.enabled ? 'Activa' : 'Inactiva'}
-                                    </button>
+            {automationTemplates.length > 0 && (
+                <section className="jarvis-panel">
+                    <div className="jarvis-panel-title"><Layers size={15} /> Plantillas rapidas</div>
+                    <div className="jarvis-automation-templates">
+                        {automationTemplates.map(template => (
+                            <article className="jarvis-automation-template-card" key={template.id}>
+                                <div>
+                                    <strong>{template.name}</strong>
+                                    <span>{template.description}</span>
+                                    <small>{describeTrigger(template.trigger)}</small>
                                 </div>
-
-                                <div className="jarvis-automation-state-row">
-                                    <span className={automation.enabled ? 'is-good' : ''}>enabled: {automation.enabled ? 'si' : 'no'}</span>
-                                    <span className={automation.running ? 'is-running' : ''}><Activity size={12} /> running: {automation.running ? 'si' : 'no'}</span>
-                                    <span>runs: {automation.run_count || 0}</span>
-                                </div>
-
-                                <div className="jarvis-automation-meta">
-                                    <span><Clock size={13} /> Proxima: {formatDate(automation.next_run_at)}</span>
-                                    <span>Ultima: {formatDate(automation.last_run_at, 'Sin ejecuciones')}</span>
-                                    <span>Resultado: {automation.last_result_status || 'Sin resultado'}</span>
-                                </div>
-
-                                {automation.last_result_summary && (
-                                    <div className="jarvis-automation-summary">{automation.last_result_summary}</div>
-                                )}
-                                {automation.last_error && (
-                                    <div className="jarvis-automation-error">{automation.last_error}</div>
-                                )}
-
-                                <div className="jarvis-automation-steps">
-                                    {steps.length === 0 && <span>Workflow sin pasos.</span>}
-                                    {steps.map((step, index) => (
-                                        <span key={`${automation.id}-${index}`}>
-                                            {index + 1}. {step.action_type} {step.human_summary ? `- ${step.human_summary}` : ''}
-                                        </span>
-                                    ))}
-                                </div>
-
-                                <details className="jarvis-automation-details">
-                                    <summary>Ver trigger y workflow</summary>
-                                    <pre>{JSON.stringify({ trigger: automation.trigger, workflow: automation.workflow }, null, 2)}</pre>
-                                </details>
-
-                                <div className="jarvis-module-actions">
-                                    <button type="button" disabled={isBusy || automation.running} onClick={() => run(automation)}>
-                                        <Play size={14} /> Ejecutar
-                                    </button>
-                                    <button type="button" disabled={isBusy} onClick={() => remove(automation)}>
-                                        <Trash2 size={14} /> Eliminar
-                                    </button>
-                                </div>
+                                <button type="button" disabled={busyId === template.id} onClick={() => applyTemplate(template)}>
+                                    <Plus size={14} /> Usar
+                                </button>
                             </article>
-                        );
-                    })}
+                        ))}
+                    </div>
                 </section>
+            )}
+
+            <div className="jarvis-automations-layout">
+                <div className="jarvis-automation-main-column">
+                    <section className="jarvis-panel jarvis-automation-list">
+                        <div className="jarvis-panel-title">Automatizaciones guardadas</div>
+                        {automationsLoading && <div className="jarvis-empty-state compact">Cargando automatizaciones...</div>}
+                        {sortedAutomations.length === 0 && !automationsLoading && <div className="jarvis-empty-state">Sin automatizaciones.</div>}
+
+                        {sortedAutomations.map(automation => {
+                            const steps = actionList(automation);
+                            const conditions = Array.isArray(automation.conditions) ? automation.conditions : [];
+                            const safety = automation.safety || {};
+                            const isBusy = busyId === automation.id;
+                            return (
+                                <article className="jarvis-automation-card" key={automation.id}>
+                                    <div className="jarvis-automation-card-head">
+                                        <div>
+                                            <strong>{automation.name}</strong>
+                                            <span>{describeTrigger(automation.trigger)}</span>
+                                        </div>
+                                        <button type="button" disabled={isBusy} onClick={() => toggle(automation)} title={automation.enabled ? 'Desactivar' : 'Activar'}>
+                                            {automation.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                                            {automation.enabled ? 'Activa' : 'Inactiva'}
+                                        </button>
+                                    </div>
+
+                                    {automation.description && (
+                                        <div className="jarvis-automation-summary">{automation.description}</div>
+                                    )}
+
+                                    <div className="jarvis-automation-state-row">
+                                        <span className={automation.enabled ? 'is-good' : ''}>enabled: {automation.enabled ? 'si' : 'no'}</span>
+                                        <span className={automation.running ? 'is-running' : ''}><Activity size={12} /> running: {automation.running ? 'si' : 'no'}</span>
+                                        <span>runs: {automation.run_count || 0}</span>
+                                        <span><Shield size={12} /> {safety.requires_confirmation || 'auto'}</span>
+                                    </div>
+
+                                    <div className="jarvis-automation-meta">
+                                        <span><Clock size={13} /> Proxima: {formatDate(automation.next_run_at)}</span>
+                                        <span>Ultima: {formatDate(automation.last_run_at, 'Sin ejecuciones')}</span>
+                                        <span>Resultado: {automation.last_result_status || 'Sin resultado'}</span>
+                                    </div>
+
+                                    {automation.last_result_summary && (
+                                        <div className="jarvis-automation-summary">{automation.last_result_summary}</div>
+                                    )}
+                                    {automation.last_error && (
+                                        <div className="jarvis-automation-error">{automation.last_error}</div>
+                                    )}
+
+                                    {conditions.length > 0 && (
+                                        <div className="jarvis-automation-steps">
+                                            <span>Condiciones:</span>
+                                            {conditions.map((condition, index) => (
+                                                <span key={`${automation.id}-cond-${index}`}>- {condition.type}</span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <div className="jarvis-automation-steps">
+                                        {steps.length === 0 && <span>Sin acciones.</span>}
+                                        {steps.map((step, index) => (
+                                            <span key={`${automation.id}-${index}`}>
+                                                {index + 1}. {step.action_type} {step.human_summary ? `- ${step.human_summary}` : ''}
+                                            </span>
+                                        ))}
+                                    </div>
+
+                                    <details className="jarvis-automation-details">
+                                        <summary>Ver trigger, condiciones y acciones</summary>
+                                        <pre>{JSON.stringify({ trigger: automation.trigger, conditions, actions: steps, safety }, null, 2)}</pre>
+                                    </details>
+
+                                    <div className="jarvis-module-actions">
+                                        <button type="button" disabled={isBusy || automation.running} onClick={() => run(automation)}>
+                                            <Play size={14} /> Ejecutar
+                                        </button>
+                                        <button type="button" disabled={isBusy} onClick={() => remove(automation)}>
+                                            <Trash2 size={14} /> Eliminar
+                                        </button>
+                                    </div>
+                                </article>
+                            );
+                        })}
+                    </section>
+
+                    <section className="jarvis-panel jarvis-automation-history-panel">
+                        <div className="jarvis-panel-title"><History size={15} /> Historial de ejecuciones</div>
+                        {automationsHistory.length === 0 && <div className="jarvis-empty-state compact">Sin ejecuciones registradas.</div>}
+                        <div className="jarvis-automation-history">
+                            {automationsHistory.map(item => (
+                                <div className={`jarvis-automation-history-row ${item.success ? '' : 'is-error'}`} key={item.id}>
+                                    <span className="jarvis-automation-history-type">{item.type}</span>
+                                    <span className="jarvis-automation-history-target">{item.display_target || '-'}</span>
+                                    <span className="jarvis-automation-history-message">{item.message}</span>
+                                    <span className="jarvis-automation-history-date">{formatDate(item.created_at, '')}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                </div>
 
                 <form className="jarvis-panel jarvis-automation-form" onSubmit={create}>
                     <div className="jarvis-panel-title"><Plus size={15} /> Nueva automatizacion</div>
@@ -245,9 +390,15 @@ const AutomationsModule = ({ context, actions }) => {
                     </label>
 
                     <label>
+                        Descripcion
+                        <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Que hace esta automatizacion" />
+                    </label>
+
+                    <label>
                         Trigger
                         <select value={triggerType} onChange={(event) => setTriggerType(event.target.value)}>
                             <option value="daily">Diaria</option>
+                            <option value="weekly">Semanal</option>
                             <option value="once">Una vez</option>
                             <option value="interval">Intervalo</option>
                             <option value="event">Evento</option>
@@ -262,8 +413,18 @@ const AutomationsModule = ({ context, actions }) => {
                         </label>
                     )}
 
-                    {triggerType === 'daily' && (
+                    {(triggerType === 'daily' || triggerType === 'weekly') && (
                         <div className="jarvis-automation-form-row">
+                            {triggerType === 'weekly' && (
+                                <label>
+                                    Dia
+                                    <select value={weekday} onChange={(event) => setWeekday(event.target.value)}>
+                                        {['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo'].map((day, index) => (
+                                            <option value={String(index)} key={day}>{day}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            )}
                             <label>
                                 Hora
                                 <input type="number" min="0" max="23" value={dailyHour} onChange={(event) => setDailyHour(event.target.value)} />
@@ -282,7 +443,7 @@ const AutomationsModule = ({ context, actions }) => {
                         </label>
                     )}
 
-                    {triggerType === 'event' && (
+                    {isEventTrigger && (
                         <label>
                             Tipo de evento
                             <select value={eventType} onChange={(event) => setEventType(event.target.value)}>
@@ -293,14 +454,28 @@ const AutomationsModule = ({ context, actions }) => {
                         </label>
                     )}
 
+                    <label>
+                        Seguridad (confirmacion)
+                        <select value={safetyPolicy} onChange={(event) => setSafetyPolicy(event.target.value)}>
+                            <option value="auto">Auto (segun la accion)</option>
+                            <option value="always">Siempre pedir confirmacion</option>
+                            <option value="never">Sin friccion extra</option>
+                        </select>
+                    </label>
+
                     <label className="jarvis-automation-check">
                         <input type="checkbox" checked={enabled} disabled={triggerType === 'manual'} onChange={(event) => setEnabled(event.target.checked)} />
                         Activar al crear
                     </label>
 
                     <label>
-                        Workflow JSON
-                        <textarea value={workflowText} onChange={(event) => setWorkflowText(event.target.value)} spellCheck="false" />
+                        Condiciones JSON (lista). Tipos: {conditionTypeOptions.join(', ')}
+                        <textarea className="jarvis-automation-conditions-json" value={conditionsText} onChange={(event) => setConditionsText(event.target.value)} spellCheck="false" rows={4} />
+                    </label>
+
+                    <label>
+                        Acciones JSON (lista de pasos)
+                        <textarea className="jarvis-automation-actions-json" value={actionsText} onChange={(event) => setActionsText(event.target.value)} spellCheck="false" rows={8} />
                     </label>
 
                     <button type="submit" className="jarvis-module-button" disabled={creating}>

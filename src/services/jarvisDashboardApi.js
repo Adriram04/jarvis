@@ -31,7 +31,7 @@ const requestJson = async (path, options = {}) => {
         const text = await response.text();
         const body = text ? JSON.parse(text) : {};
         if (!response.ok) {
-            return fail(body?.error || body?.message || response.statusText, {
+            return fail(body?.error || body?.message || body?.detail || response.statusText, {
                 status: response.status,
                 raw: body,
                 data: body,
@@ -92,7 +92,21 @@ export const getProjects = () => requestJson('/api/projects');
 
 export const getProjectTree = (projectName) => requestJson(`/api/projects/${encodeURIComponent(projectName)}/tree`);
 
+export const activateProject = (projectName) => requestJson(`/api/projects/${encodeURIComponent(projectName)}/activate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+});
+
 export const getAutomations = () => requestJson('/api/automations');
+
+export const getAutomationsHistory = (limit = 100) => requestJson(`/api/automations/history?limit=${encodeURIComponent(limit)}`);
+
+export const getAutomationTemplates = () => requestJson('/api/automations/templates');
+
+export const applyAutomationTemplate = (templateId, overrides = {}) => requestJson(`/api/automations/templates/${encodeURIComponent(templateId)}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(overrides || {}),
+});
 
 export const confirmPendingAction = (id) => requestJson(`/api/pending-actions/${encodeURIComponent(id)}/confirm`, {
     method: 'POST',

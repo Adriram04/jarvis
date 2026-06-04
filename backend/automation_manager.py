@@ -12,7 +12,36 @@ except Exception:  # pragma: no cover - Python fallback for unusual runtimes.
 
 
 DEFAULT_DAILY_TIMEZONE = "Europe/Madrid"
-ALLOWED_TRIGGER_TYPES = {"manual", "once", "daily", "interval", "event"}
+
+# Schedule kinds (time based triggers) handled by the scheduler loop.
+SCHEDULE_KINDS = {"daily", "weekly", "once", "interval"}
+
+# Trigger.type values accepted as canonical event names. Event triggers can use
+# any dotted name, but these are the first-class ones surfaced in the UI.
+KNOWN_EVENT_TRIGGERS = {
+    "system.startup",
+    "whatsapp.message_received",
+    "openwa.connected",
+    "calendar.event_upcoming",
+    "printer.finished",
+    "pending_action.created",
+    "openclaw.inbound_message",
+}
+
+# Safety confirmation policies for the whole automation.
+SAFETY_POLICIES = {"auto", "always", "never"}
+
+# Condition types understood by the ConditionEvaluator.
+KNOWN_CONDITION_TYPES = {
+    "always",
+    "message_contains",
+    "sender_in_allowlist",
+    "provider_connected",
+    "time_between",
+    "has_calendar_events",
+    "project_active",
+    "simulation_enabled",
+}
 
 
 def _now():
@@ -73,11 +102,13 @@ def _timezone(name=None):
     return datetime.now().astimezone().tzinfo or timezone.utc
 
 
-def _workflow_steps(workflow):
-    if isinstance(workflow, list):
-        return workflow
-    if isinstance(workflow, dict):
-        steps = workflow.get("steps")
+def _action_steps(source):
+    """Extract a list of step dicts from either an ``actions`` list or a legacy
+    ``workflow`` object/list."""
+    if isinstance(source, list):
+        return source
+    if isinstance(source, dict):
+        steps = source.get("steps")
         return steps if isinstance(steps, list) else []
     return []
 
@@ -103,8 +134,40 @@ def _result_field(result, key):
     return None
 
 
+def _classify_trigger(trigger):
+    """Return ``(category, detail)`` where category is one of ``manual``,
+    ``schedule`` or ``event``.
+
+    Accepts both the new spec model (``{"type": "schedule", "schedule": {...}}``
+    and event-name types such as ``{"type": "whatsapp.message_received"}``) and
+    the legacy model (``{"type": "daily"}``, ``{"type": "event", "event_type": ...}``).
+    """
+    raw = str((trigger or {}).get("type") or "manual").strip().lower()
+    if raw == "manual":
+        return "manual", None
+    if raw == "schedule":
+        kind = str((trigger.get("schedule") or {}).get("kind") or "daily").strip().lower()
+        return "schedule", kind if kind in SCHEDULE_KINDS else "daily"
+    if raw in SCHEDULE_KINDS:  # legacy: daily/once/interval/weekly at top level
+        return "schedule", raw
+    if raw == "event":  # legacy generic event with event_type field
+        return "event", str(trigger.get("event_type") or "").strip()
+    # Event-name trigger, e.g. whatsapp.message_received / camera.deepfake_suspected
+    return "event", raw
+
+
+def _schedule_params(trigger):
+    """Where schedule parameters live: nested under ``schedule`` for the new model
+    or at the top level for the legacy model."""
+    if str((trigger or {}).get("type") or "").strip().lower() == "schedule":
+        nested = trigger.get("schedule")
+        return nested if isinstance(nested, dict) else {}
+    return trigger or {}
+
+
 class AutomationManager:
-    """Stores scheduled Jarvis automations and computes their next run."""
+    """Stores Jarvis automations (event -> conditions -> actions) and computes
+    the next run for time based triggers."""
 
     def __init__(self, storage_path=None, seed_examples=True):
         base_dir = Path(__file__).resolve().parent
@@ -113,6 +176,7 @@ class AutomationManager:
         self._automations = []
         self._load(seed_examples=seed_examples)
 
+    # ------------------------------------------------------------------ reads
     def list_automations(self):
         with self._lock:
             return deepcopy(sorted(self._automations, key=lambda item: item.get("created_at") or ""))
@@ -125,6 +189,7 @@ class AutomationManager:
                     return deepcopy(automation)
         return None
 
+    # ----------------------------------------------------------------- writes
     def create_automation(self, data):
         data = data or {}
         validation = self.validate_automation_payload(data)
@@ -136,8 +201,12 @@ class AutomationManager:
             {
                 "id": str(uuid.uuid4()),
                 "name": data.get("name"),
+                "description": data.get("description"),
                 "trigger": data.get("trigger") or {},
-                "workflow": data.get("workflow") or {"steps": []},
+                "conditions": data.get("conditions"),
+                "actions": data.get("actions"),
+                "workflow": data.get("workflow"),
+                "safety": data.get("safety"),
                 "enabled": bool(data.get("enabled", True)),
                 "created_at": now_iso,
                 "updated_at": now_iso,
@@ -179,6 +248,7 @@ class AutomationManager:
                     return deepcopy(removed)
         return None
 
+    # -------------------------------------------------------------- selection
     def due_automations(self, now=None):
         now = now or _now()
         due = []
@@ -202,15 +272,17 @@ class AutomationManager:
                 trigger = automation.get("trigger") or {}
                 if not automation.get("enabled"):
                     continue
-                if self._trigger_type(trigger) != "event":
+                category, detail = _classify_trigger(trigger)
+                if category != "event":
                     continue
-                if str(trigger.get("event_type") or "").strip() != event_type:
+                if str(detail or "").strip() != event_type:
                     continue
                 if not self._event_filters_match(trigger.get("filters") or {}, payload):
                     continue
                 matches.append(deepcopy(automation))
         return matches
 
+    # -------------------------------------------------------------- validation
     def validate_automation_payload(self, data):
         data = data or {}
         errors = []
@@ -223,46 +295,70 @@ class AutomationManager:
             errors.append("Trigger must be an object.")
             trigger = {}
 
-        trigger_type = str(trigger.get("type") or "manual").strip().lower()
-        if trigger_type not in ALLOWED_TRIGGER_TYPES:
-            errors.append(f"Unsupported trigger type: {trigger_type}.")
+        category, detail = _classify_trigger(trigger)
+        params = _schedule_params(trigger)
 
-        if trigger_type == "once" and not _parse_datetime(trigger.get("run_at")):
-            errors.append("Trigger once requires a valid run_at datetime.")
-
-        if trigger_type == "daily":
-            hour = trigger.get("hour", 9)
-            minute = trigger.get("minute", 0)
-            if not _is_int(hour) or not 0 <= int(hour) <= 23:
-                errors.append("Trigger daily requires hour between 0 and 23.")
-            if not _is_int(minute) or not 0 <= int(minute) <= 59:
-                errors.append("Trigger daily requires minute between 0 and 59.")
-
-        if trigger_type == "interval":
-            minutes = trigger.get("minutes", 60)
-            if not _is_int(minutes) or int(minutes) < 1:
-                errors.append("Trigger interval requires minutes >= 1.")
-
-        if trigger_type == "event":
-            if not str(trigger.get("event_type") or "").strip():
+        if category == "schedule":
+            kind = detail
+            if kind == "once" and not _parse_datetime(params.get("run_at")):
+                errors.append("Trigger once requires a valid run_at datetime.")
+            if kind in {"daily", "weekly"}:
+                hour = params.get("hour", 9)
+                minute = params.get("minute", 0)
+                if not _is_int(hour) or not 0 <= int(hour) <= 23:
+                    errors.append("Trigger schedule requires hour between 0 and 23.")
+                if not _is_int(minute) or not 0 <= int(minute) <= 59:
+                    errors.append("Trigger schedule requires minute between 0 and 59.")
+            if kind == "weekly":
+                weekday = params.get("weekday", 0)
+                if not _is_int(weekday) or not 0 <= int(weekday) <= 6:
+                    errors.append("Trigger weekly requires weekday between 0 (Mon) and 6 (Sun).")
+            if kind == "interval":
+                minutes = params.get("minutes", 60)
+                if not _is_int(minutes) or int(minutes) < 1:
+                    errors.append("Trigger interval requires minutes >= 1.")
+        elif category == "event":
+            if not str(detail or "").strip():
                 errors.append("Trigger event requires event_type.")
             if trigger.get("filters") is not None and not isinstance(trigger.get("filters"), dict):
                 errors.append("Trigger event filters must be an object.")
 
-        steps = _workflow_steps(data.get("workflow"))
-        if not steps:
-            errors.append("Workflow must include at least one step.")
+        # Conditions (optional, AND-evaluated). Empty == always.
+        conditions = data.get("conditions")
+        if conditions is not None:
+            if not isinstance(conditions, list):
+                errors.append("Conditions must be a list.")
+            else:
+                for index, condition in enumerate(conditions):
+                    if not isinstance(condition, dict):
+                        errors.append(f"Condition {index + 1} must be an object.")
+                        continue
+                    if not str(condition.get("type") or "").strip():
+                        errors.append(f"Condition {index + 1} requires a type.")
+
+        # Actions (aka workflow steps).
+        steps = data.get("actions")
+        if steps is None:
+            steps = _action_steps(data.get("workflow"))
+        if not isinstance(steps, list) or not steps:
+            errors.append("Workflow (actions) requires at least one action.")
+            steps = steps if isinstance(steps, list) else []
         for index, step in enumerate(steps):
             if not isinstance(step, dict):
-                errors.append(f"Workflow step {index + 1} must be an object.")
+                errors.append(f"Action {index + 1} must be an object.")
                 continue
             if not str(step.get("action_type") or "").strip():
-                errors.append(f"Workflow step {index + 1} requires action_type.")
+                errors.append(f"Action {index + 1} requires action_type.")
             if step.get("payload") is not None and not isinstance(step.get("payload"), dict):
-                errors.append(f"Workflow step {index + 1} payload must be an object.")
+                errors.append(f"Action {index + 1} payload must be an object.")
+
+        safety = data.get("safety")
+        if safety is not None and not isinstance(safety, dict):
+            errors.append("Safety must be an object.")
 
         return {"valid": not errors, "errors": errors}
 
+    # --------------------------------------------------------------- run state
     def claim_automation_for_run(self, automation_id):
         automation_id = str(automation_id or "").strip()
         with self._lock:
@@ -345,7 +441,8 @@ class AutomationManager:
                 automation["last_result_status"] = str(status or "").strip() or None
                 automation["last_result_summary"] = str(summary or error or "").strip() or None
                 automation["last_error"] = str(error or summary or "").strip() if success is False and status != "waiting_for_confirmation" else None
-                if self._trigger_type(automation.get("trigger")) == "once":
+                category, kind = _classify_trigger(automation.get("trigger"))
+                if category == "schedule" and kind == "once":
                     automation["enabled"] = False
                     automation["next_run_at"] = None
                 else:
@@ -360,58 +457,76 @@ class AutomationManager:
                 return deepcopy(automation)
         return None
 
+    # ---------------------------------------------------------------- schedule
     def calculate_next_run(self, trigger, last_run_at=None, enabled=True, now=None):
         if not enabled:
             return None
 
         now = now or _now()
         trigger = trigger or {}
-        trigger_type = self._trigger_type(trigger)
+        category, kind = _classify_trigger(trigger)
 
-        if trigger_type == "manual":
+        if category in {"manual", "event"}:
             return None
 
-        if trigger_type == "event":
-            return None
+        params = _schedule_params(trigger)
 
-        if trigger_type == "once":
+        if kind == "once":
             if last_run_at:
                 return None
-            run_at = _parse_datetime(trigger.get("run_at"))
+            run_at = _parse_datetime(params.get("run_at"))
             return _iso(run_at) if run_at else None
 
-        if trigger_type == "daily":
-            hour = _clean_int(trigger.get("hour"), default=9, minimum=0, maximum=23)
-            minute = _clean_int(trigger.get("minute"), default=0, minimum=0, maximum=59)
-            tz = _timezone(trigger.get("timezone") or DEFAULT_DAILY_TIMEZONE)
+        if kind == "interval":
+            minutes = _clean_int(params.get("minutes"), default=60, minimum=1)
+            base = _parse_datetime(last_run_at) or now
+            return _iso(base + timedelta(minutes=minutes))
+
+        if kind in {"daily", "weekly"}:
+            hour = _clean_int(params.get("hour"), default=9, minimum=0, maximum=23)
+            minute = _clean_int(params.get("minute"), default=0, minimum=0, maximum=59)
+            tz = _timezone(params.get("timezone") or DEFAULT_DAILY_TIMEZONE)
             local_now = now.astimezone(tz)
             last_run = _parse_datetime(last_run_at)
             last_local = last_run.astimezone(tz) if last_run else None
+
             candidate_date = local_now.date()
             if last_local and last_local.date() > candidate_date:
                 candidate_date = last_local.date()
             candidate = datetime.combine(candidate_date, datetime_time(hour, minute), tzinfo=tz)
+
+            if kind == "weekly":
+                target_weekday = _clean_int(params.get("weekday"), default=0, minimum=0, maximum=6)
+                days_ahead = (target_weekday - candidate.weekday()) % 7
+                candidate = candidate + timedelta(days=days_ahead)
+                while candidate <= local_now or (last_local and candidate <= last_local):
+                    candidate = candidate + timedelta(days=7)
+                return _iso(candidate)
+
             if last_local and candidate <= last_local:
                 candidate = candidate + timedelta(days=1)
             while candidate <= local_now:
                 candidate = candidate + timedelta(days=1)
             return _iso(candidate)
 
-        if trigger_type == "interval":
-            minutes = _clean_int(trigger.get("minutes"), default=60, minimum=1)
-            base = _parse_datetime(last_run_at) or now
-            candidate = base + timedelta(minutes=minutes)
-            return _iso(candidate)
-
         return None
 
+    # -------------------------------------------------------------- normalize
     def _normalize_automation(self, automation, recompute_next=False):
         now_iso = _iso(_now())
         automation = deepcopy(automation or {})
         automation["id"] = str(automation.get("id") or uuid.uuid4())
         automation["name"] = str(automation.get("name") or "Automatizacion sin nombre").strip()
+        automation["description"] = str(automation.get("description") or "").strip()
         automation["trigger"] = self._normalize_trigger(automation.get("trigger"))
-        automation["workflow"] = self._normalize_workflow(automation.get("workflow"))
+        automation["conditions"] = self._normalize_conditions(automation.get("conditions"))
+        actions = self._normalize_actions(
+            automation.get("actions") if automation.get("actions") is not None else automation.get("workflow")
+        )
+        automation["actions"] = actions
+        # Backwards/forwards-compatible alias consumed by WorkflowManager.
+        automation["workflow"] = {"steps": deepcopy(actions)}
+        automation["safety"] = self._normalize_safety(automation.get("safety"))
         automation["enabled"] = bool(automation.get("enabled", True))
         automation["created_at"] = automation.get("created_at") or now_iso
         automation["updated_at"] = automation.get("updated_at") or now_iso
@@ -433,31 +548,55 @@ class AutomationManager:
 
     def _normalize_trigger(self, trigger):
         trigger = dict(trigger or {})
-        trigger_type = self._trigger_type(trigger)
-        normalized = {"type": trigger_type}
-        if trigger_type == "once":
-            normalized["run_at"] = _iso(_parse_datetime(trigger.get("run_at"))) if trigger.get("run_at") else None
-        elif trigger_type == "daily":
-            normalized["hour"] = _clean_int(trigger.get("hour"), default=9, minimum=0, maximum=23)
-            normalized["minute"] = _clean_int(trigger.get("minute"), default=0, minimum=0, maximum=59)
-            normalized["timezone"] = str(trigger.get("timezone") or DEFAULT_DAILY_TIMEZONE).strip() or DEFAULT_DAILY_TIMEZONE
-        elif trigger_type == "interval":
-            normalized["minutes"] = _clean_int(trigger.get("minutes"), default=60, minimum=1)
-        elif trigger_type == "event":
-            normalized["event_type"] = str(trigger.get("event_type") or "").strip()
-            normalized["filters"] = deepcopy(trigger.get("filters")) if isinstance(trigger.get("filters"), dict) else {}
+        category, detail = _classify_trigger(trigger)
+
+        if category == "manual":
+            return {"type": "manual"}
+
+        if category == "schedule":
+            kind = detail
+            params = _schedule_params(trigger)
+            schedule = {"kind": kind}
+            if kind == "once":
+                schedule["run_at"] = _iso(_parse_datetime(params.get("run_at"))) if params.get("run_at") else None
+            elif kind == "interval":
+                schedule["minutes"] = _clean_int(params.get("minutes"), default=60, minimum=1)
+            elif kind in {"daily", "weekly"}:
+                schedule["hour"] = _clean_int(params.get("hour"), default=9, minimum=0, maximum=23)
+                schedule["minute"] = _clean_int(params.get("minute"), default=0, minimum=0, maximum=59)
+                schedule["timezone"] = str(params.get("timezone") or DEFAULT_DAILY_TIMEZONE).strip() or DEFAULT_DAILY_TIMEZONE
+                if kind == "weekly":
+                    schedule["weekday"] = _clean_int(params.get("weekday"), default=0, minimum=0, maximum=6)
+            return {"type": "schedule", "schedule": schedule}
+
+        # Event trigger: the canonical name lives directly in ``type``.
+        event_type = str(detail or "").strip() or "event"
+        return {
+            "type": event_type,
+            "filters": deepcopy(trigger.get("filters")) if isinstance(trigger.get("filters"), dict) else {},
+        }
+
+    def _normalize_conditions(self, conditions):
+        if not isinstance(conditions, list):
+            return []
+        normalized = []
+        for condition in conditions:
+            if not isinstance(condition, dict):
+                continue
+            condition_type = str(condition.get("type") or "").strip()
+            if not condition_type:
+                continue
+            entry = {"type": condition_type}
+            for key, value in condition.items():
+                if key == "type":
+                    continue
+                entry[key] = deepcopy(value)
+            normalized.append(entry)
         return normalized
 
-    def _normalize_workflow(self, workflow):
-        if isinstance(workflow, list):
-            steps = workflow
-        elif isinstance(workflow, dict):
-            steps = workflow.get("steps") or []
-        else:
-            steps = []
-
+    def _normalize_actions(self, source):
         normalized_steps = []
-        for step in steps:
+        for step in _action_steps(source):
             if not isinstance(step, dict):
                 continue
             action_type = str(step.get("action_type") or "").strip()
@@ -471,13 +610,17 @@ class AutomationManager:
                     "stop_on_error": bool(step.get("stop_on_error", True)),
                 }
             )
-        return {"steps": normalized_steps}
+        return normalized_steps
 
-    def _trigger_type(self, trigger):
-        trigger_type = str((trigger or {}).get("type") or "manual").strip().lower()
-        if trigger_type not in ALLOWED_TRIGGER_TYPES:
-            return "manual"
-        return trigger_type
+    def _normalize_safety(self, safety):
+        safety = safety if isinstance(safety, dict) else {}
+        policy = str(safety.get("requires_confirmation") or "auto").strip().lower()
+        if policy not in SAFETY_POLICIES:
+            policy = "auto"
+        return {
+            "requires_confirmation": policy,
+            "sensitive": bool(safety.get("sensitive", False)),
+        }
 
     def _event_filters_match(self, filters, payload):
         if not filters:
@@ -499,6 +642,7 @@ class AutomationManager:
                 return False
         return True
 
+    # ------------------------------------------------------------- persistence
     def _load(self, seed_examples=True):
         if not self.storage_path.exists():
             self._automations = self._default_automations() if seed_examples else []
@@ -529,97 +673,8 @@ class AutomationManager:
         )
 
     def _default_automations(self):
-        now_iso = _iso(_now())
-        examples = [
-            {
-                "id": str(uuid.uuid4()),
-                "name": "Resumen diario del calendario",
-                "trigger": {"type": "daily", "hour": 9, "minute": 0, "timezone": DEFAULT_DAILY_TIMEZONE},
-                "workflow": {
-                    "steps": [
-                        {
-                            "action_type": "list_calendar_events",
-                            "payload": {"max_results": 10},
-                            "human_summary": "Consultar los proximos eventos del calendario.",
-                            "stop_on_error": True,
-                        }
-                    ]
-                },
-                "enabled": True,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "name": "Workflow manual calendario",
-                "trigger": {"type": "manual"},
-                "workflow": {
-                    "steps": [
-                        {
-                            "action_type": "list_calendar_events",
-                            "payload": {"max_results": 5},
-                            "human_summary": "Listar los proximos eventos del calendario.",
-                            "stop_on_error": True,
-                        }
-                    ]
-                },
-                "enabled": False,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "name": "Responder a mensaje inbound de OpenClaw",
-                "trigger": {"type": "event", "event_type": "openclaw.inbound_message", "filters": {}},
-                "workflow": {
-                    "steps": [
-                        {
-                            "action_type": "draft_content",
-                            "payload": {"content": "Preparar respuesta segura al mensaje inbound."},
-                            "human_summary": "Crear borrador seguro para revisar antes de responder.",
-                            "stop_on_error": True,
-                        }
-                    ]
-                },
-                "enabled": False,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "name": "Alerta ante deepfake sospechado",
-                "trigger": {"type": "event", "event_type": "camera.deepfake_suspected", "filters": {}},
-                "workflow": {
-                    "steps": [
-                        {
-                            "action_type": "draft_content",
-                            "payload": {"content": "Posible deepfake detectado. Revisar manualmente antes de continuar."},
-                            "human_summary": "Preparar aviso interno sin ejecutar acciones sensibles.",
-                            "stop_on_error": True,
-                        },
-                    ]
-                },
-                "enabled": False,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "name": "Comprobacion de estado cada 60 minutos",
-                "trigger": {"type": "interval", "minutes": 60},
-                "workflow": {
-                    "steps": [
-                        {
-                            "action_type": "check_status",
-                            "payload": {},
-                            "human_summary": "Comprobar el estado del gateway de integraciones.",
-                            "stop_on_error": False,
-                        }
-                    ]
-                },
-                "enabled": False,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            },
-        ]
-        return [self._normalize_automation(item, recompute_next=True) for item in examples]
+        try:
+            from automation_templates import seed_automations
+        except Exception:
+            return []
+        return [self._normalize_automation(item, recompute_next=True) for item in seed_automations()]

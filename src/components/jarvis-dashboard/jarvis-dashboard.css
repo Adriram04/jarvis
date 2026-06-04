@@ -9,6 +9,10 @@
     --jarvis-text: #F8FAFC;
     --jarvis-muted: #94A3B8;
     --jarvis-border: rgba(0, 229, 255, 0.22);
+    --jarvis-scrollbar-track: rgba(5, 7, 13, 0.28);
+    --jarvis-scrollbar-track-border: rgba(5, 7, 13, 0.72);
+    --jarvis-scrollbar-thumb: linear-gradient(180deg, rgba(0, 229, 255, 0.68), rgba(0, 163, 255, 0.36));
+    --jarvis-scrollbar-thumb-hover: linear-gradient(180deg, rgba(0, 229, 255, 0.92), rgba(0, 163, 255, 0.58));
 }
 
 .jarvis-dashboard-root,
@@ -87,6 +91,107 @@
 
 .jarvis-dashboard-root button {
     cursor: pointer;
+}
+
+.jarvis-dashboard-root,
+.jarvis-dashboard-root :is(
+    .jarvis-nav,
+    .jarvis-center-column,
+    .jarvis-right-column,
+    .jarvis-project-detail,
+    .jarvis-project-list,
+    .jarvis-automation-details pre,
+    .jarvis-automation-history,
+    .jarvis-automation-form,
+    .jarvis-chat-timeline,
+    .jarvis-chat-side,
+    .jarvis-profile-panel,
+    .jarvis-modal,
+    .jarvis-social-scroll
+) {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 229, 255, 0.42) rgba(5, 7, 13, 0.22);
+}
+
+.jarvis-dashboard-root::-webkit-scrollbar,
+.jarvis-dashboard-root :is(
+    .jarvis-nav,
+    .jarvis-center-column,
+    .jarvis-right-column,
+    .jarvis-project-detail,
+    .jarvis-project-list,
+    .jarvis-automation-details pre,
+    .jarvis-automation-history,
+    .jarvis-automation-form,
+    .jarvis-chat-timeline,
+    .jarvis-chat-side,
+    .jarvis-profile-panel,
+    .jarvis-modal,
+    .jarvis-social-scroll
+)::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+
+.jarvis-dashboard-root::-webkit-scrollbar-track,
+.jarvis-dashboard-root :is(
+    .jarvis-nav,
+    .jarvis-center-column,
+    .jarvis-right-column,
+    .jarvis-project-detail,
+    .jarvis-project-list,
+    .jarvis-automation-details pre,
+    .jarvis-automation-history,
+    .jarvis-automation-form,
+    .jarvis-chat-timeline,
+    .jarvis-chat-side,
+    .jarvis-profile-panel,
+    .jarvis-modal,
+    .jarvis-social-scroll
+)::-webkit-scrollbar-track {
+    border-radius: 999px;
+    background: var(--jarvis-scrollbar-track);
+}
+
+.jarvis-dashboard-root::-webkit-scrollbar-thumb,
+.jarvis-dashboard-root :is(
+    .jarvis-nav,
+    .jarvis-center-column,
+    .jarvis-right-column,
+    .jarvis-project-detail,
+    .jarvis-project-list,
+    .jarvis-automation-details pre,
+    .jarvis-automation-history,
+    .jarvis-automation-form,
+    .jarvis-chat-timeline,
+    .jarvis-chat-side,
+    .jarvis-profile-panel,
+    .jarvis-modal,
+    .jarvis-social-scroll
+)::-webkit-scrollbar-thumb {
+    border: 2px solid var(--jarvis-scrollbar-track-border);
+    border-radius: 999px;
+    background: var(--jarvis-scrollbar-thumb);
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.24);
+}
+
+.jarvis-dashboard-root::-webkit-scrollbar-thumb:hover,
+.jarvis-dashboard-root :is(
+    .jarvis-nav,
+    .jarvis-center-column,
+    .jarvis-right-column,
+    .jarvis-project-detail,
+    .jarvis-project-list,
+    .jarvis-automation-details pre,
+    .jarvis-automation-history,
+    .jarvis-automation-form,
+    .jarvis-chat-timeline,
+    .jarvis-chat-side,
+    .jarvis-profile-panel,
+    .jarvis-modal,
+    .jarvis-social-scroll
+)::-webkit-scrollbar-thumb:hover {
+    background: var(--jarvis-scrollbar-thumb-hover);
 }
 
 .jarvis-background-grid {
@@ -189,28 +294,6 @@
     margin-top: 8px;
     padding-right: 2px;
     overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 229, 255, 0.42) rgba(5, 7, 13, 0.22);
-}
-
-.jarvis-nav::-webkit-scrollbar {
-    width: 7px;
-}
-
-.jarvis-nav::-webkit-scrollbar-track {
-    border-radius: 999px;
-    background: rgba(5, 7, 13, 0.28);
-}
-
-.jarvis-nav::-webkit-scrollbar-thumb {
-    border: 2px solid rgba(5, 7, 13, 0.72);
-    border-radius: 999px;
-    background: linear-gradient(180deg, rgba(0, 229, 255, 0.68), rgba(0, 163, 255, 0.36));
-    box-shadow: 0 0 10px rgba(0, 229, 255, 0.24);
-}
-
-.jarvis-nav::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, rgba(0, 229, 255, 0.92), rgba(0, 163, 255, 0.58));
 }
 
 .jarvis-nav-item {
@@ -310,11 +393,6 @@
     min-height: 0;
     overflow-y: auto;
     padding: 26px 0 0;
-    scrollbar-width: none;
-}
-
-.jarvis-center-column::-webkit-scrollbar {
-    display: none;
 }
 
 .jarvis-hero-copy {
@@ -727,15 +805,6 @@
     min-height: 0;
     overflow-y: auto;
     padding-right: 2px;
-}
-
-.jarvis-right-column::-webkit-scrollbar {
-    width: 4px;
-}
-
-.jarvis-right-column::-webkit-scrollbar-thumb {
-    background: rgba(0, 229, 255, 0.2);
-    border-radius: 999px;
 }
 
 .jarvis-window-controls {
@@ -1414,6 +1483,7 @@
 .jarvis-project-detail,
 .jarvis-automation-list,
 .jarvis-automation-form,
+.jarvis-automation-history-panel,
 .jarvis-system-log {
     padding: 16px;
 }
@@ -1441,7 +1511,7 @@
 
 .jarvis-project-card {
     display: grid;
-    grid-template-columns: 20px minmax(0, 1fr);
+    grid-template-columns: 20px minmax(0, 1fr) auto;
     gap: 6px 10px;
     align-items: center;
     width: 100%;
@@ -1454,11 +1524,12 @@
 }
 
 .jarvis-project-card svg {
-    grid-row: span 2;
+    grid-row: span 3;
     color: var(--jarvis-cyan);
 }
 
 .jarvis-project-card span {
+    grid-column: 2 / 3;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1466,6 +1537,7 @@
 }
 
 .jarvis-project-card small {
+    grid-column: 2 / 3;
     overflow: hidden;
     color: var(--jarvis-muted);
     text-overflow: ellipsis;
@@ -1477,6 +1549,30 @@
     border-color: rgba(0, 229, 255, 0.34);
     background: rgba(0, 163, 255, 0.1);
     box-shadow: inset 0 0 20px rgba(0, 229, 255, 0.035);
+}
+
+.jarvis-project-card.is-current {
+    border-color: rgba(0, 255, 147, 0.28);
+}
+
+.jarvis-project-card-status {
+    grid-column: 3 / 4 !important;
+    grid-row: 1 / 3;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    justify-self: end;
+    min-height: 24px;
+    padding: 0 7px;
+    color: #9FFFD6 !important;
+    border: 1px solid rgba(0, 255, 147, 0.22);
+    border-radius: 7px;
+    background: rgba(0, 255, 147, 0.08);
+}
+
+.jarvis-project-card-status svg {
+    grid-row: auto;
+    color: currentColor;
 }
 
 .jarvis-project-tree-node {
@@ -1520,8 +1616,59 @@
 }
 
 .jarvis-automations-layout {
-    grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.42fr);
     align-items: start;
+}
+
+.jarvis-automation-overview {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.jarvis-automation-metric {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 2px 10px;
+    align-items: center;
+    min-width: 0;
+    min-height: 58px;
+    padding: 10px;
+    border: 1px solid rgba(0, 229, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(5, 7, 13, 0.42);
+}
+
+.jarvis-automation-metric svg {
+    grid-row: span 2;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 8px;
+    color: var(--jarvis-cyan);
+    border-radius: 8px;
+    background: rgba(0, 163, 255, 0.1);
+}
+
+.jarvis-automation-metric span {
+    overflow: hidden;
+    color: var(--jarvis-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jarvis-automation-metric strong {
+    color: var(--jarvis-text);
+    font-size: 18px;
+    line-height: 1;
+}
+
+.jarvis-automation-main-column {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
 }
 
 .jarvis-automation-list,
@@ -1531,6 +1678,13 @@
     align-content: start;
 }
 
+.jarvis-automation-form {
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - 160px);
+    overflow: auto;
+}
+
 .jarvis-automation-card {
     display: grid;
     gap: 12px;
@@ -1538,13 +1692,20 @@
     border: 1px solid rgba(0, 229, 255, 0.14);
     border-radius: 8px;
     background: rgba(5, 7, 13, 0.46);
+    min-width: 0;
 }
 
 .jarvis-automation-card-head {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: flex-start;
-    justify-content: space-between;
     gap: 12px;
+}
+
+.jarvis-automation-card-head > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
 }
 
 .jarvis-automation-card-head strong,
@@ -1559,6 +1720,13 @@
 .jarvis-automation-details {
     color: var(--jarvis-muted);
     font-size: 12px;
+}
+
+.jarvis-automation-card-head strong,
+.jarvis-automation-card-head span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .jarvis-automation-state-row {
@@ -1578,6 +1746,7 @@
     border-radius: 7px;
     background: rgba(5, 7, 13, 0.38);
     font-size: 11px;
+    white-space: nowrap;
 }
 
 .jarvis-automation-state-row .is-good {
@@ -1601,9 +1770,16 @@
     border: 1px solid rgba(0, 229, 255, 0.18);
     border-radius: 7px;
     background: rgba(0, 163, 255, 0.08);
+    white-space: nowrap;
 }
 
-.jarvis-automation-meta,
+.jarvis-automation-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+    min-width: 0;
+}
+
 .jarvis-automation-steps,
 .jarvis-automation-form {
     display: grid;
@@ -1614,6 +1790,18 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jarvis-automation-meta span svg {
+    flex: 0 0 auto;
+}
+
+.jarvis-automation-steps span {
+    overflow-wrap: anywhere;
 }
 
 .jarvis-automation-summary,
@@ -1625,7 +1813,8 @@
     background: rgba(0, 163, 255, 0.06);
     color: #BEEBFF;
     font-size: 12px;
-    text-overflow: ellipsis;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
 }
 
 .jarvis-automation-error {
@@ -1650,11 +1839,103 @@
     background: rgba(0, 0, 0, 0.28);
     font-size: 11px;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
+
+/* Automation templates ---------------------------------------------------- */
+.jarvis-automation-templates {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px;
+}
+
+.jarvis-automation-template-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid rgba(0, 229, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(0, 163, 255, 0.05);
+}
+
+.jarvis-automation-template-card > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.jarvis-automation-template-card strong,
+.jarvis-automation-template-card span,
+.jarvis-automation-template-card small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jarvis-automation-template-card strong { color: #DFF6FF; font-size: 13px; }
+.jarvis-automation-template-card span { color: #9FD7EC; font-size: 11px; }
+.jarvis-automation-template-card small { color: var(--jarvis-cyan); font-size: 10px; }
+
+.jarvis-automation-template-card button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 28px;
+    padding: 0 8px;
+    color: var(--jarvis-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-radius: 7px;
+    background: rgba(0, 163, 255, 0.08);
+    white-space: nowrap;
+}
+
+/* Automation history ------------------------------------------------------ */
+.jarvis-automation-history {
+    display: grid;
+    gap: 4px;
+    max-height: 260px;
+    overflow: auto;
+}
+
+.jarvis-automation-history-row {
+    display: grid;
+    grid-template-columns: minmax(110px, 0.8fr) minmax(90px, 0.55fr) minmax(0, 1.8fr) minmax(112px, 0.75fr);
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid rgba(0, 229, 255, 0.10);
+    border-radius: 7px;
+    background: rgba(0, 163, 255, 0.04);
+    font-size: 11px;
+    color: #BEEBFF;
+}
+
+.jarvis-automation-history-row span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jarvis-automation-history-row.is-error {
+    border-color: rgba(248, 113, 113, 0.22);
+    background: rgba(248, 113, 113, 0.07);
+    color: #FCA5A5;
+}
+
+.jarvis-automation-history-type { color: var(--jarvis-cyan); font-weight: 600; }
+.jarvis-automation-history-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jarvis-automation-history-date { text-align: right; opacity: 0.8; }
 
 .jarvis-automation-form label {
     display: grid;
     gap: 6px;
+    min-width: 0;
+    line-height: 1.35;
 }
 
 .jarvis-automation-form input,
@@ -1671,15 +1952,20 @@
 }
 
 .jarvis-automation-form textarea {
-    min-height: 220px;
+    min-height: 116px;
     resize: vertical;
     font-family: "Share Tech Mono", monospace;
     font-size: 12px;
+    line-height: 1.45;
+}
+
+.jarvis-automation-form textarea.jarvis-automation-actions-json {
+    min-height: 180px;
 }
 
 .jarvis-automation-form-row {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
     gap: 8px;
 }
 
@@ -2287,6 +2573,22 @@
     }
 }
 
+@media (max-width: 1500px) {
+    .jarvis-automations-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .jarvis-automation-form {
+        position: static;
+        max-height: none;
+        overflow: visible;
+    }
+
+    .jarvis-automation-overview {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 @media (max-width: 1180px) {
     .jarvis-desktop-dashboard {
         grid-template-columns: 200px minmax(430px, 1fr) 300px;
@@ -2300,6 +2602,23 @@
 
     .jarvis-action-grid {
         grid-template-columns: repeat(3, minmax(76px, 1fr));
+    }
+
+    .jarvis-automation-card-head {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .jarvis-automation-card-head button {
+        justify-self: start;
+    }
+
+    .jarvis-automation-history-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+
+    .jarvis-automation-history-date {
+        text-align: left;
     }
 }
 

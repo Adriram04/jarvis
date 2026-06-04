@@ -17,14 +17,18 @@ import JarvisDashboard from './components/jarvis-dashboard/JarvisDashboard';
 import LinkedInPostModal from './components/jarvis-dashboard/LinkedInPostModal';
 import { formatPrinterState, isActivePrinterState, isFinishedOrIdlePrinterState } from './utils/printerStatus';
 import {
+    activateProject,
     cancelPendingAction,
     confirmPendingAction,
+    applyAutomationTemplate,
     createAutomation,
     createCalendarEvent,
     deleteAutomation,
     dispatchAutomationEvent,
     extractCalendarItems,
     getAutomations,
+    getAutomationsHistory,
+    getAutomationTemplates,
     getBackendStatus,
     getCalendarSortValue,
     getOpenClawEvents,
@@ -136,7 +140,10 @@ function App() {
     const [projectTree, setProjectTree] = useState(null);
     const [projectTreeLoading, setProjectTreeLoading] = useState(false);
     const [projectTreeError, setProjectTreeError] = useState(null);
+    const projectTreeRequestRef = useRef(0);
     const [automations, setAutomations] = useState([]);
+    const [automationsHistory, setAutomationsHistory] = useState([]);
+    const [automationTemplates, setAutomationTemplates] = useState([]);
 
 
     // RESTORED STATE
@@ -388,8 +395,34 @@ function App() {
         return response;
     }, [setDashboardSectionError, setDashboardSectionLoading]);
 
+    const refreshAutomationsHistory = useCallback(async () => {
+        const response = await getAutomationsHistory(100);
+        if (response.ok && response.success) {
+            const body = response.data || {};
+            const items = body.history || body.data?.history || [];
+            setAutomationsHistory(Array.isArray(items) ? items : []);
+        } else {
+            setAutomationsHistory([]);
+        }
+        return response;
+    }, []);
+
+    const refreshAutomationTemplates = useCallback(async () => {
+        const response = await getAutomationTemplates();
+        if (response.ok && response.success) {
+            const body = response.data || {};
+            const items = body.templates || body.data?.templates || [];
+            setAutomationTemplates(Array.isArray(items) ? items : []);
+        } else {
+            setAutomationTemplates([]);
+        }
+        return response;
+    }, []);
+
     const loadProjectTree = useCallback(async (projectName) => {
         const name = String(projectName || '').trim();
+        const requestId = projectTreeRequestRef.current + 1;
+        projectTreeRequestRef.current = requestId;
         if (!name) {
             setProjectTree(null);
             setProjectTreeError(null);
@@ -397,8 +430,12 @@ function App() {
         }
 
         setProjectTreeLoading(true);
+        setProjectTree(null);
         setProjectTreeError(null);
         const response = await getProjectTree(name);
+        if (requestId !== projectTreeRequestRef.current) {
+            return response;
+        }
         if (response.ok && response.success) {
             setProjectTree(response.data || null);
         } else {
@@ -408,6 +445,21 @@ function App() {
         setProjectTreeLoading(false);
         return response;
     }, []);
+
+    const handleActivateProject = useCallback(async (projectName) => {
+        const name = String(projectName || '').trim();
+        if (!name) return { ok: false, success: false, error: 'Proyecto no valido' };
+
+        const response = await activateProject(name);
+        if (response.ok && response.success) {
+            const body = response.data || {};
+            const activeName = body.current_project || name;
+            setCurrentProject(activeName);
+            await refreshProjects();
+            await loadProjectTree(activeName);
+        }
+        return response;
+    }, [loadProjectTree, refreshProjects]);
 
     const refreshIntegrationStatuses = useCallback(async () => {
         setDashboardSectionLoading('integrations', true);
@@ -2029,10 +2081,17 @@ function App() {
         return response;
     };
 
+    const handleApplyAutomationTemplate = async (templateId, overrides = {}) => {
+        const response = await applyAutomationTemplate(templateId, overrides);
+        await refreshAutomations();
+        return response;
+    };
+
     const handleRunAutomation = async (id) => {
         const response = await runAutomation(id);
         await Promise.all([
             refreshAutomations(),
+            refreshAutomationsHistory(),
             refreshPendingActions(),
             refreshOpenClawEvents(),
             refreshCalendarEvents(),
@@ -2044,6 +2103,7 @@ function App() {
         const response = await dispatchAutomationEvent(eventType, payload);
         await Promise.all([
             refreshAutomations(),
+            refreshAutomationsHistory(),
             refreshPendingActions(),
             refreshOpenClawEvents(),
         ]);
@@ -2227,6 +2287,8 @@ function App() {
         runtime: {
             activePrintStatus,
             automations,
+            automationsHistory,
+            automationTemplates,
             automationsError: dashboardError.automations,
             automationsLoading: Boolean(dashboardLoading.automations),
             backendStatus,
@@ -2293,7 +2355,11 @@ function App() {
                 onMarkAllRead={async () => { await markWhatsAppMessagesRead(); await refreshWhatsAppMessages(); }}
                 onRefreshIntegrations={refreshIntegrationStatuses}
                 onRefreshProjects={refreshProjects}
+                onActivateProject={handleActivateProject}
                 onRefreshAutomations={refreshAutomations}
+                onRefreshAutomationsHistory={refreshAutomationsHistory}
+                onRefreshAutomationTemplates={refreshAutomationTemplates}
+                onApplyAutomationTemplate={handleApplyAutomationTemplate}
                 onLoadProjectTree={loadProjectTree}
                 onConfirmPending={handleConfirmDashboardPending}
                 onCancelPending={handleCancelDashboardPending}

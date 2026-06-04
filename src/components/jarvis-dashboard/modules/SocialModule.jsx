@@ -220,7 +220,7 @@ const SocialModule = ({ context, actions }) => {
                             style={{ flex: 1, fontSize: '0.85em', padding: '3px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'inherit' }}
                         />
                     </div>
-                    <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                    <div className="jarvis-social-scroll" style={{ maxHeight: 340, overflowY: 'auto' }}>
                         {filtered(contacts).length === 0 && (
                             <div className="jarvis-empty-state">
                                 {contacts.length === 0 ? 'Sin contactos sincronizados. Pulsa "Sincronizar contactos".' : 'Sin resultados.'}
@@ -259,7 +259,7 @@ const SocialModule = ({ context, actions }) => {
                             style={{ flex: 1, fontSize: '0.85em', padding: '3px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'inherit' }}
                         />
                     </div>
-                    <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                    <div className="jarvis-social-scroll" style={{ maxHeight: 340, overflowY: 'auto' }}>
                         {filtered(groups).length === 0 && (
                             <div className="jarvis-empty-state">
                                 {groups.length === 0 ? 'Sin grupos sincronizados. Pulsa "Sincronizar grupos".' : 'Sin resultados.'}

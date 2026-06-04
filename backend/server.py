@@ -51,6 +51,8 @@ for import_path in (PROJECT_ROOT, BACKEND_DIR):
 
 import backend.jarvis as jarvis
 from automation_manager import AutomationManager
+import automation_templates
+from condition_evaluator import ConditionEvaluator
 from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
 from integrations.openclaw_bridge import OpenClawBridge
@@ -286,7 +288,9 @@ openclaw_events_manager = OpenClawEventsManager()
 openclaw_messages_manager = OpenClawMessagesManager()
 automation_manager = AutomationManager()
 workflow_manager = None
+condition_evaluator = None
 automation_scheduler_task = None
+calendar_upcoming_notified = set()
 printer_finished_events = set()
 SETTINGS_FILE = BACKEND_DIR / "settings.json"
 REFERENCE_IMAGE_FILE = BACKEND_DIR / "reference.jpg"
@@ -710,6 +714,26 @@ async def api_project_tree(project_name: str):
     project_path = _safe_project_path(project_name)
     return {"success": True, "project": _project_summary(project_path), "tree": _project_tree(project_path)}
 
+
+@app.post("/api/projects/{project_name}/activate")
+async def api_project_activate(project_name: str):
+    project_path = _safe_project_path(project_name)
+    if not audio_loop or not getattr(audio_loop, "project_manager", None):
+        raise HTTPException(status_code=503, detail="Project manager unavailable.")
+
+    success, message = audio_loop.project_manager.switch_project(project_path.name)
+    if not success:
+        raise HTTPException(status_code=404, detail=message)
+
+    current_project = audio_loop.project_manager.current_project
+    await sio.emit('project_update', {'project': current_project})
+    return {
+        "success": True,
+        "message": message,
+        "current_project": current_project,
+        "project": _project_summary(project_path),
+    }
+
 @app.post("/api/simulation/activate")
 async def api_simulation_activate():
     message = await set_simulation_mode(True)
@@ -992,6 +1016,9 @@ def _public_openclaw_payload(payload):
 async def _execute_openclaw_action(action_type, payload):
     payload = dict(payload or {})
     payload.setdefault("confirmed", True)
+    automation_result = await _execute_automation_action(action_type, payload)
+    if automation_result is not None:
+        return automation_result
     if action_type == "check_status":
         result = await openclaw_bridge.check_status()
         openclaw_events_manager.add_event(
@@ -1086,6 +1113,12 @@ async def _execute_or_queue_openclaw_action(action_type, payload, human_summary=
             warnings=["forbidden"],
         )
 
+    # Per-automation safety policy can force confirmation even on safe actions.
+    # It can NEVER downgrade a confirmation_required/forbidden action (security
+    # stays authoritative); "never" simply means "no extra friction".
+    if classification == "safe" and _automation_safety_policy(payload) == "always":
+        classification = "confirmation_required"
+
     if classification == "confirmation_required":
         pending = pending_actions_manager.create_pending_action(
             action_type,
@@ -1119,6 +1152,221 @@ def _get_workflow_manager():
     if workflow_manager is None:
         workflow_manager = WorkflowManager(_execute_or_queue_openclaw_action)
     return workflow_manager
+
+
+def _get_project_manager():
+    return getattr(audio_loop, "project_manager", None) if audio_loop else None
+
+
+def _extract_calendar_events(result):
+    """Best-effort extraction of a calendar event list from an OpenClaw result."""
+    if not isinstance(result, dict):
+        return []
+    for key in ("events", "items", "results"):
+        value = result.get(key)
+        if isinstance(value, list):
+            return value
+    raw = result.get("raw") if isinstance(result.get("raw"), (dict, list)) else result.get("data")
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        for key in ("events", "items", "results"):
+            value = raw.get(key)
+            if isinstance(value, list):
+                return value
+    return []
+
+
+async def _automation_provider_is_provider_connected(name):
+    name = str(name or "").strip().lower()
+    try:
+        if name in {"openwa", "whatsapp"} and _whatsapp_provider() == "openwa":
+            status = await openwa_bridge.check_status()
+        else:
+            status = await openclaw_bridge.check_status()
+        return bool(status.get("success"))
+    except Exception:
+        return False
+
+
+def _automation_provider_is_sender_allowed(sender):
+    sender = str(sender or "").strip()
+    if not sender:
+        return False
+    try:
+        match = openclaw_targets_manager.find_best_match("whatsapp", sender)
+        return bool(match and match.get("allowed"))
+    except Exception:
+        return False
+
+
+async def _automation_provider_has_calendar_events(condition=None):
+    try:
+        result = await openclaw_bridge.execute_action("list_calendar_events", {"max_results": 5})
+        return len(_extract_calendar_events(result)) > 0
+    except Exception:
+        return False
+
+
+def _automation_provider_is_project_active(name=None):
+    pm = _get_project_manager()
+    if not pm:
+        return False
+    current = getattr(pm, "current_project", None)
+    if name:
+        return str(current) == str(name)
+    return bool(current and str(current) != "temp")
+
+
+def _get_condition_evaluator():
+    global condition_evaluator
+    if condition_evaluator is None:
+        condition_evaluator = ConditionEvaluator(
+            providers={
+                "is_provider_connected": _automation_provider_is_provider_connected,
+                "is_sender_allowed": _automation_provider_is_sender_allowed,
+                "has_calendar_events": _automation_provider_has_calendar_events,
+                "is_project_active": _automation_provider_is_project_active,
+                "is_simulation_enabled": simulation_manager.is_simulation_enabled,
+            }
+        )
+    return condition_evaluator
+
+
+def _automation_safety_policy(payload):
+    """Reads safety.requires_confirmation from the workflow context, if present."""
+    if not isinstance(payload, dict):
+        return "auto"
+    context = payload.get("_workflow_context")
+    automation = context.get("automation") if isinstance(context, dict) else None
+    safety = automation.get("safety") if isinstance(automation, dict) else None
+    if isinstance(safety, dict):
+        return str(safety.get("requires_confirmation") or "auto").strip().lower()
+    return "auto"
+
+
+async def _execute_automation_action(action_type, payload):
+    """Handlers for the automation-level action vocabulary. Returns None when the
+    action is not an automation action (so the caller falls through to the regular
+    OpenClaw/OpenWA executor)."""
+    public_payload = _public_openclaw_payload(payload or {})
+
+    if action_type == "notify":
+        title = str(public_payload.get("title") or "Notificacion de JARVIS").strip()
+        message = str(
+            public_payload.get("message")
+            or public_payload.get("text")
+            or public_payload.get("title")
+            or "Notificacion de automatizacion."
+        ).strip()
+        priority = str(public_payload.get("priority") or "normal").strip()
+        try:
+            await sio.emit("automation_notification", {"title": title, "message": message, "priority": priority})
+        except Exception as exc:
+            print(f"[AUTOMATION] notify emit failed: {exc}")
+        return _openclaw_local_result("notify", f"{title}: {message}", raw={"priority": priority})
+
+    if action_type == "play_music":
+        playlist = str(public_payload.get("playlist") or public_payload.get("query") or "").strip()
+        detail = f" ({playlist})" if playlist else ""
+        return _openclaw_local_result(
+            "play_music",
+            f"Reproduccion de musica solicitada{detail}. (Sin integracion de musica conectada; accion simulada.)",
+            raw={"playlist": playlist, "integration": "none"},
+        )
+
+    if action_type == "open_project":
+        name = str(public_payload.get("project") or public_payload.get("name") or "").strip()
+        pm = _get_project_manager()
+        if not pm:
+            return _openclaw_local_result("open_project", "No hay gestor de proyectos disponible.", success=False, warnings=["unavailable"])
+        if not name:
+            current = getattr(pm, "current_project", None)
+            return _openclaw_local_result("open_project", f"Proyecto activo actual: {current or 'temp'}.", raw={"current_project": current})
+        ok, message = pm.switch_project(name)
+        return _openclaw_local_result("open_project", message, success=bool(ok), raw={"current_project": getattr(pm, "current_project", None)})
+
+    if action_type == "activate_simulation":
+        state = simulation_manager.activate_all()
+        return _openclaw_local_result("activate_simulation", "Simulacion activada (modo demo sin hardware).", raw=state)
+
+    if action_type == "check_integrations":
+        results = {}
+        try:
+            results["openclaw"] = await openclaw_bridge.check_status()
+        except Exception as exc:
+            results["openclaw"] = {"success": False, "error": str(exc)}
+        try:
+            results["openwa"] = await openwa_bridge.check_status()
+        except Exception as exc:
+            results["openwa"] = {"success": False, "error": str(exc)}
+        ok = bool(results.get("openclaw", {}).get("success") or results.get("openwa", {}).get("success"))
+        connected = [name for name, value in results.items() if isinstance(value, dict) and value.get("success")]
+        summary = f"Integraciones conectadas: {', '.join(connected) if connected else 'ninguna'}."
+        return _openclaw_local_result("check_integrations", summary, success=ok, raw=results)
+
+    if action_type == "list_calendar_today":
+        try:
+            result = await openclaw_bridge.execute_action("list_calendar_events", {"max_results": int(public_payload.get("max_results") or 10)})
+        except Exception as exc:
+            return _openclaw_local_result("list_calendar_today", f"No pude consultar el calendario: {exc}", success=False, warnings=["calendar_error"])
+        events = _extract_calendar_events(result)
+        return _openclaw_local_result("list_calendar_today", f"Eventos en el calendario: {len(events)}.", raw={"events": events})
+
+    if action_type == "list_whatsapp_unread":
+        unread = openclaw_messages_manager.get_unread_count(channel="whatsapp")
+        messages = openclaw_messages_manager.list_new_messages(channel="whatsapp", limit=int(public_payload.get("limit") or 20))
+        return _openclaw_local_result("list_whatsapp_unread", f"Mensajes de WhatsApp sin leer: {unread}.", raw={"unread": unread, "messages": messages})
+
+    if action_type == "summarize_day":
+        unread = openclaw_messages_manager.get_unread_count(channel="whatsapp")
+        pending = len(pending_actions_manager.get_pending_actions())
+        try:
+            calendar_result = await openclaw_bridge.execute_action("list_calendar_events", {"max_results": 10})
+            events = _extract_calendar_events(calendar_result)
+        except Exception:
+            events = []
+        summary = (
+            f"Resumen del dia: {len(events)} evento(s) en el calendario, "
+            f"{unread} mensaje(s) de WhatsApp sin leer y {pending} accion(es) pendiente(s)."
+        )
+        try:
+            await sio.emit("automation_notification", {"title": "Resumen del dia", "message": summary, "priority": "normal"})
+        except Exception:
+            pass
+        return _openclaw_local_result("summarize_day", summary, raw={"events": events, "unread": unread, "pending": pending})
+
+    if action_type == "create_pending_action":
+        target_action = str(public_payload.get("target_action_type") or public_payload.get("action_type") or "").strip()
+        if not target_action:
+            return _openclaw_local_result("create_pending_action", "Falta target_action_type para crear la accion pendiente.", success=False, warnings=["invalid_request"])
+        target_payload = public_payload.get("target_payload") if isinstance(public_payload.get("target_payload"), dict) else {}
+        human_summary = str(public_payload.get("human_summary") or _openclaw_human_summary(target_action, target_payload)).strip()
+        pending = pending_actions_manager.create_pending_action(target_action, target_payload, human_summary)
+        await dispatch_automation_event(
+            "pending_action.created",
+            {"pending_action": pending, "action_type": target_action, "payload": target_payload, "human_summary": human_summary},
+        )
+        return _openclaw_local_result("create_pending_action", f"Accion pendiente creada: {human_summary}", raw=pending, warnings=["confirmation_required"])
+
+    if action_type == "prepare_whatsapp_reply":
+        target = public_payload.get("target") or public_payload.get("display_target")
+        message = str(public_payload.get("message") or public_payload.get("reply") or "").strip()
+        send_payload = {
+            "channel": public_payload.get("channel", "whatsapp"),
+            "target": target,
+            "display_target": public_payload.get("display_target") or target,
+            "message": message,
+        }
+        human_summary = str(public_payload.get("human_summary") or _openclaw_human_summary("send_message", send_payload)).strip()
+        pending = pending_actions_manager.create_pending_action("send_message", send_payload, human_summary)
+        await dispatch_automation_event(
+            "pending_action.created",
+            {"pending_action": pending, "action_type": "send_message", "payload": send_payload, "human_summary": human_summary},
+        )
+        return _openclaw_local_result("prepare_whatsapp_reply", f"Respuesta de WhatsApp preparada y pendiente de confirmacion. ID: {pending['id']}", raw=pending, warnings=["confirmation_required"])
+
+    return None
 
 
 def _automation_event_message(event_type, automation, result, source):
@@ -1181,6 +1429,32 @@ async def _run_automation_by_id(automation_id, source="manual", event_type=None,
         return _api_success(result)
 
     try:
+        evaluation = await _get_condition_evaluator().evaluate(
+            automation.get("conditions") or [],
+            event_payload or {},
+        )
+        if not evaluation.get("passed"):
+            skip_result = {
+                "success": True,
+                "status": "skipped_conditions",
+                "automation": automation,
+                "summary": evaluation.get("summary"),
+                "conditions": evaluation.get("results"),
+            }
+            # Advance next_run_at so scheduled automations don't loop every tick.
+            updated = automation_manager.mark_run(
+                automation_id,
+                result={"success": True, "status": "skipped_conditions", "summary": evaluation.get("summary")},
+            )
+            skip_result["automation"] = updated or automation
+            await _record_and_dispatch_automation_event(
+                "automation.skipped_conditions",
+                updated or automation,
+                result=skip_result,
+                source=source,
+            )
+            return _api_success(skip_result)
+
         await _record_and_dispatch_automation_event(
             "automation.started",
             automation,
@@ -1256,6 +1530,59 @@ async def dispatch_automation_event(event_type, payload=None):
     return {"event_type": event_type, "matched": len(matches), "results": results}
 
 
+def _parse_calendar_start(event):
+    from datetime import timezone
+
+    start = event.get("start") or event.get("start_time") or event.get("when")
+    if isinstance(start, dict):
+        start = start.get("dateTime") or start.get("date")
+    if not start:
+        return None
+    text = str(start).strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+async def _check_calendar_upcoming():
+    """Polls the calendar and fires calendar.event_upcoming for events starting
+    soon. Only runs when at least one automation listens for that event."""
+    from datetime import timezone
+
+    if not automation_manager.automations_for_event("calendar.event_upcoming", {}):
+        return
+    try:
+        window_minutes = int(os.getenv("JARVIS_CALENDAR_UPCOMING_WINDOW_MIN", "30") or 30)
+    except Exception:
+        window_minutes = 30
+    try:
+        result = await openclaw_bridge.execute_action("list_calendar_events", {"max_results": 10})
+    except Exception:
+        return
+    now = datetime.now(timezone.utc)
+    for event in _extract_calendar_events(result):
+        if not isinstance(event, dict):
+            continue
+        start = _parse_calendar_start(event)
+        if not start:
+            continue
+        minutes_until = (start - now).total_seconds() / 60.0
+        if not 0 <= minutes_until <= window_minutes:
+            continue
+        event_id = str(event.get("id") or event.get("event_id") or event.get("summary") or start.isoformat())
+        if event_id in calendar_upcoming_notified:
+            continue
+        calendar_upcoming_notified.add(event_id)
+        await dispatch_automation_event(
+            "calendar.event_upcoming",
+            {"event": event, "minutes_until": round(minutes_until), "start": start.isoformat()},
+        )
+
+
 async def _automation_scheduler_loop():
     await asyncio.sleep(5)
     while True:
@@ -1264,6 +1591,7 @@ async def _automation_scheduler_loop():
             for automation in automation_manager.due_automations():
                 print(f"[AUTOMATION] Running due automation: {automation.get('name')}")
                 await _run_automation_by_id(automation.get("id"), source="scheduler")
+            await _check_calendar_upcoming()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1852,6 +2180,31 @@ async def api_automations_list():
     return _api_success({"automations": automation_manager.list_automations()})
 
 
+@app.get("/api/automations/history")
+async def api_automations_history(limit: int = 100):
+    """Execution history: automation lifecycle events recorded in the event log."""
+    events = openclaw_events_manager.list_events(limit=limit, channel="automation")
+    return _api_success({"history": events})
+
+
+@app.get("/api/automations/templates")
+async def api_automations_templates():
+    return _api_success({"templates": automation_templates.list_templates()})
+
+
+@app.post("/api/automations/templates/{template_id}/apply")
+async def api_automations_apply_template(template_id: str, data: dict = Body(default={})):
+    overrides = data if isinstance(data, dict) else {}
+    payload = automation_templates.template_as_automation_payload(template_id, overrides)
+    if not payload:
+        return _api_error("No encuentro esa plantilla.", status_code=404)
+    try:
+        automation = automation_manager.create_automation(payload)
+    except ValueError as exc:
+        return _api_error(str(exc), status_code=400)
+    return _api_success({"automation": automation, "template_id": template_id})
+
+
 @app.post("/api/automations")
 async def api_automations_create(data: dict = Body(default={})):
     try:
@@ -1869,6 +2222,12 @@ async def api_automations_event_dispatch(data: dict = Body(default={})):
         return _api_error("event_type es obligatorio.", status_code=400)
     result = await dispatch_automation_event(event_type, payload)
     return _api_success(result)
+
+
+@app.post("/api/automations/events")
+async def api_automations_event_dispatch_alias(data: dict = Body(default={})):
+    """Alias of /api/automations/events/dispatch matching the spec."""
+    return await api_automations_event_dispatch(data)
 
 
 @app.get("/api/automations/{automation_id}")
@@ -1942,6 +2301,18 @@ async def api_openclaw_inbound(request: Request, data: dict = Body(default={})):
             "raw": data,
         },
     )
+
+    if str((incoming_message or {}).get("channel") or "").lower() == "whatsapp":
+        await dispatch_automation_event(
+            "whatsapp.message_received",
+            {
+                "incoming": incoming_message,
+                "message": stored_message,
+                "stored_message": stored_message,
+                "target": target_record,
+                "raw": data,
+            },
+        )
 
     if not _env_bool("JARVIS_OPENCLAW_AUTOPILOT_ENABLED", True):
         return _api_success(
@@ -2210,6 +2581,8 @@ async def api_openwa_inbound(request: Request, data: dict = Body(default={})):
             "unread_count": openclaw_messages_manager.get_unread_count(channel="whatsapp"),
             "session_event": event,
         })
+        if event == "session.connected":
+            await dispatch_automation_event("openwa.connected", {"event": event, "provider": "openwa", "raw": data})
         return _api_success({"handled": True, "event": event})
 
     if event and event != "message.received":
@@ -2259,6 +2632,18 @@ async def api_openwa_inbound(request: Request, data: dict = Body(default={})):
             "raw": data,
         },
     )
+
+    if str((incoming_message or {}).get("channel") or "").lower() == "whatsapp":
+        await dispatch_automation_event(
+            "whatsapp.message_received",
+            {
+                "incoming": incoming_message,
+                "message": stored_message,
+                "stored_message": stored_message,
+                "target": target_record,
+                "raw": data,
+            },
+        )
 
     return _api_success({
         "handled": True,

@@ -136,3 +136,88 @@ def test_validation_rejects_invalid_payloads(tmp_path, payload, error):
 
     assert validation["valid"] is False
     assert any(error in item for item in validation["errors"])
+
+
+# --------------------------------------------------------------- new spec model
+def _actions():
+    return [
+        {"action_type": "summarize_day", "payload": {}, "human_summary": "Resumen.", "stop_on_error": False}
+    ]
+
+
+def test_spec_model_round_trips_description_conditions_actions_safety(tmp_path):
+    manager = AutomationManager(tmp_path / "automations.json", seed_examples=False)
+    automation = manager.create_automation(
+        {
+            "name": "Resumen diario",
+            "description": "Lee la agenda cada manana.",
+            "trigger": {"type": "schedule", "schedule": {"kind": "daily", "hour": 9, "minute": 0}},
+            "conditions": [{"type": "has_calendar_events"}],
+            "actions": _actions(),
+            "safety": {"requires_confirmation": "always", "sensitive": True},
+        }
+    )
+
+    assert automation["description"] == "Lee la agenda cada manana."
+    assert automation["trigger"]["type"] == "schedule"
+    assert automation["trigger"]["schedule"]["kind"] == "daily"
+    assert automation["conditions"][0]["type"] == "has_calendar_events"
+    assert automation["actions"][0]["action_type"] == "summarize_day"
+    assert automation["safety"]["requires_confirmation"] == "always"
+    # Backwards-compatible alias consumed by WorkflowManager.
+    assert automation["workflow"]["steps"][0]["action_type"] == "summarize_day"
+
+
+def test_event_name_trigger_matches_event(tmp_path):
+    manager = AutomationManager(tmp_path / "automations.json", seed_examples=False)
+    automation = manager.create_automation(
+        {
+            "name": "WhatsApp urgente",
+            "trigger": {"type": "whatsapp.message_received", "filters": {"incoming.channel": "whatsapp"}},
+            "actions": _actions(),
+        }
+    )
+    assert automation["trigger"]["type"] == "whatsapp.message_received"
+
+    matches = manager.automations_for_event("whatsapp.message_received", {"incoming": {"channel": "whatsapp"}})
+    assert [item["id"] for item in matches] == [automation["id"]]
+    assert manager.automations_for_event("whatsapp.message_received", {"incoming": {"channel": "email"}}) == []
+
+
+def test_schedule_once_disables_after_run(tmp_path):
+    manager = AutomationManager(tmp_path / "automations.json", seed_examples=False)
+    automation = manager.create_automation(
+        {
+            "name": "One shot spec",
+            "trigger": {"type": "schedule", "schedule": {"kind": "once", "run_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}},
+            "actions": _actions(),
+        }
+    )
+    updated = manager.mark_run(automation["id"], result={"success": True, "status": "completed"})
+    assert updated["enabled"] is False
+    assert updated["next_run_at"] is None
+
+
+def test_weekly_next_run_lands_on_requested_weekday(tmp_path):
+    manager = AutomationManager(tmp_path / "automations.json", seed_examples=False)
+    # 2026-06-01 is a Monday (weekday 0). Ask for Wednesday (weekday 2) at 08:00 UTC.
+    now = datetime(2026, 6, 1, 6, 0, tzinfo=timezone.utc)
+    next_run = manager.calculate_next_run(
+        {"type": "schedule", "schedule": {"kind": "weekly", "weekday": 2, "hour": 8, "minute": 0, "timezone": "UTC"}},
+        now=now,
+    )
+    parsed = datetime.fromisoformat(next_run)
+    assert parsed.weekday() == 2
+
+
+def test_invalid_safety_policy_falls_back_to_auto(tmp_path):
+    manager = AutomationManager(tmp_path / "automations.json", seed_examples=False)
+    automation = manager.create_automation(
+        {
+            "name": "Safety fallback",
+            "trigger": {"type": "manual"},
+            "actions": _actions(),
+            "safety": {"requires_confirmation": "weird"},
+        }
+    )
+    assert automation["safety"]["requires_confirmation"] == "auto"

@@ -24,6 +24,17 @@ SAFE_ACTIONS = {
     "openclaw_resolve_alias",
     "openclaw_add_target_alias",
     "openclaw_remove_target_alias",
+    # Automation actions (read-only / local state, safe to run unattended).
+    "notify",
+    "summarize_day",
+    "list_calendar_today",
+    "list_whatsapp_unread",
+    "prepare_whatsapp_reply",
+    "create_pending_action",
+    "play_music",
+    "open_project",
+    "activate_simulation",
+    "check_integrations",
 }
 
 CONFIRMATION_REQUIRED_ACTIONS = {
