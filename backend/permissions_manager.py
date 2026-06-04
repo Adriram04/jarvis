@@ -32,6 +32,7 @@ SAFE_ACTIONS = {
     "prepare_whatsapp_reply",
     "create_pending_action",
     "play_music",
+    "control_music",
     "open_project",
     "activate_simulation",
     "check_integrations",

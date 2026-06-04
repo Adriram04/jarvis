@@ -97,6 +97,35 @@ export const activateProject = (projectName) => requestJson(`/api/projects/${enc
     body: JSON.stringify({}),
 });
 
+export const getMusicStatus = () => requestJson('/api/music/status');
+
+export const searchMusic = (query, mode = 'search') => requestJson('/api/music/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, mode }),
+});
+
+export const playMusic = (query, mode = 'search') => requestJson('/api/music/play', {
+    method: 'POST',
+    body: JSON.stringify({ query, mode }),
+});
+
+export const randomMusic = (payload = {}) => requestJson('/api/music/random', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+});
+
+export const sendMusicCommand = (command, payload = {}) => requestJson('/api/music/command', {
+    method: 'POST',
+    body: JSON.stringify({ command, ...(payload || {}) }),
+});
+
+export const getMusicPreferences = () => requestJson('/api/music/preferences');
+
+export const updateMusicPreferences = (payload) => requestJson('/api/music/preferences', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+});
+
 export const getAutomations = () => requestJson('/api/automations');
 
 export const getAutomationsHistory = (limit = 100) => requestJson(`/api/automations/history?limit=${encodeURIComponent(limit)}`);

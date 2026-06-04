@@ -30,6 +30,12 @@ import {
     getAutomationsHistory,
     getAutomationTemplates,
     getBackendStatus,
+    getMusicStatus,
+    getMusicPreferences,
+    playMusic,
+    randomMusic,
+    sendMusicCommand,
+    updateMusicPreferences,
     getCalendarSortValue,
     getOpenClawEvents,
     getOpenClawStatus,
@@ -144,6 +150,12 @@ function App() {
     const [automations, setAutomations] = useState([]);
     const [automationsHistory, setAutomationsHistory] = useState([]);
     const [automationTemplates, setAutomationTemplates] = useState([]);
+    const [musicStatus, setMusicStatus] = useState(null);
+    const [musicPreferences, setMusicPreferences] = useState(null);
+    const [musicHistory, setMusicHistory] = useState([]);
+    const [musicCommand, setMusicCommand] = useState(null);
+    const [musicError, setMusicError] = useState(null);
+    const [musicLoading, setMusicLoading] = useState(false);
 
 
     // RESTORED STATE
@@ -419,6 +431,77 @@ function App() {
         return response;
     }, []);
 
+    const applyMusicResult = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return;
+        setMusicStatus(payload);
+        if (payload.error) {
+            setMusicError(payload.error);
+        } else {
+            setMusicError(null);
+        }
+        if (payload.query) {
+            setMusicHistory(prev => [
+                { query: payload.query, title: payload.title, provider: payload.provider, fallback: payload.fallback, played_at: new Date().toISOString() },
+                ...prev,
+            ].slice(0, 30));
+        }
+    }, []);
+
+    const refreshMusicStatus = useCallback(async () => {
+        const response = await getMusicStatus();
+        if (response.ok && response.success) {
+            const body = response.data?.data || response.data || {};
+            setMusicStatus(prev => ({ ...(prev || {}), ...body }));
+        }
+        return response;
+    }, []);
+
+    const refreshMusicPreferences = useCallback(async () => {
+        const response = await getMusicPreferences();
+        if (response.ok && response.success) {
+            const body = response.data?.data || response.data || {};
+            setMusicPreferences(body.preferences || null);
+            if (Array.isArray(body.history)) setMusicHistory(body.history);
+        }
+        return response;
+    }, []);
+
+    const handlePlayMusic = useCallback(async (query, mode = 'search') => {
+        setMusicLoading(true);
+        const response = await playMusic(query, mode);
+        setMusicLoading(false);
+        const payload = response?.data?.data || response?.data;
+        if (response?.success && payload) applyMusicResult(payload);
+        else setMusicError(response?.error || 'No se pudo reproducir.');
+        return response;
+    }, [applyMusicResult]);
+
+    const handleRandomMusic = useCallback(async () => {
+        setMusicLoading(true);
+        const response = await randomMusic({});
+        setMusicLoading(false);
+        const payload = response?.data?.data || response?.data;
+        if (response?.success && payload) applyMusicResult(payload);
+        else setMusicError(response?.error || 'No se pudo reproducir.');
+        return response;
+    }, [applyMusicResult]);
+
+    const handleMusicCommand = useCallback(async (command, payload = {}) => {
+        const response = await sendMusicCommand(command, payload);
+        const body = response?.data?.data || response?.data;
+        if (response?.success && body) {
+            setMusicCommand({ ...body, _ts: Date.now() });
+            if (typeof body.volume === 'number') setMusicStatus(prev => ({ ...(prev || {}), volume: body.volume }));
+        }
+        return response;
+    }, []);
+
+    const handleUpdateMusicPreferences = useCallback(async (payload) => {
+        const response = await updateMusicPreferences(payload);
+        if (response?.success) await refreshMusicPreferences();
+        return response;
+    }, [refreshMusicPreferences]);
+
     const loadProjectTree = useCallback(async (projectName) => {
         const name = String(projectName || '').trim();
         const requestId = projectTreeRequestRef.current + 1;
@@ -543,6 +626,8 @@ function App() {
         refreshIntegrationStatuses();
         refreshProjects();
         refreshAutomations();
+        refreshMusicStatus();
+        refreshMusicPreferences();
 
         const backendTimer = setInterval(() => {
             refreshBackendStatus();
@@ -952,6 +1037,23 @@ function App() {
             }
         });
 
+        // Music events (voice/UI -> backend -> frontend player)
+        socket.on('music_play', (data) => {
+            applyMusicResult(data || {});
+        });
+        socket.on('music_command', (data) => {
+            if (data) setMusicCommand({ ...data, _ts: Date.now() });
+            if (data && typeof data.volume === 'number') {
+                setMusicStatus(prev => ({ ...(prev || {}), volume: data.volume }));
+            }
+        });
+        socket.on('music_status', (data) => {
+            if (data) setMusicStatus(prev => ({ ...(prev || {}), ...data }));
+        });
+        socket.on('music_error', (data) => {
+            setMusicError(data?.error || 'Error de musica.');
+        });
+
         // Slicing progress for top toolbar
         socket.on('slicing_progress', (data) => {
             console.log('[SLICING] Progress:', data);
@@ -1072,6 +1174,10 @@ function App() {
             socket.off('project_update');
             socket.off('printer_list');
             socket.off('simulation_status');
+            socket.off('music_play');
+            socket.off('music_command');
+            socket.off('music_status');
+            socket.off('music_error');
             socket.off('slicing_progress');
             socket.off('print_status_update');
             socket.off('error');
@@ -2289,6 +2395,12 @@ function App() {
             automations,
             automationsHistory,
             automationTemplates,
+            musicStatus,
+            musicPreferences,
+            musicHistory,
+            musicCommand,
+            musicError,
+            musicLoading,
             automationsError: dashboardError.automations,
             automationsLoading: Boolean(dashboardLoading.automations),
             backendStatus,
@@ -2360,6 +2472,12 @@ function App() {
                 onRefreshAutomationsHistory={refreshAutomationsHistory}
                 onRefreshAutomationTemplates={refreshAutomationTemplates}
                 onApplyAutomationTemplate={handleApplyAutomationTemplate}
+                onPlayMusic={handlePlayMusic}
+                onRandomMusic={handleRandomMusic}
+                onMusicCommand={handleMusicCommand}
+                onRefreshMusicStatus={refreshMusicStatus}
+                onRefreshMusicPreferences={refreshMusicPreferences}
+                onUpdateMusicPreferences={handleUpdateMusicPreferences}
                 onLoadProjectTree={loadProjectTree}
                 onConfirmPending={handleConfirmDashboardPending}
                 onCancelPending={handleCancelDashboardPending}

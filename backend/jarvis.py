@@ -28,6 +28,7 @@ import time
 from google import genai
 from google.genai import types
 from simulation_manager import simulation_manager
+from music_manager import music_manager
 from simulators.kasa_simulator import kasa_simulator
 from simulators.printer_simulator import printer_simulator
 
@@ -290,6 +291,53 @@ get_simulation_status_tool = {
     }
 }
 
+play_music_tool = {
+    "name": "play_music",
+    "description": (
+        "Plays music on YouTube inside JARVIS. Use for requests like 'pon musica de X', "
+        "'pon la cancion X', 'pon algo de rock', 'pon musica para programar', or 'pon algo que me guste'. "
+        "The frontend plays the result; you only choose the query and mode."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "query": {"type": "STRING", "description": "Artist, song, genre or mood text. Empty for random from preferences."},
+            "mode": {"type": "STRING", "description": "One of: artist, song, genre, mood, random, search."},
+        },
+        "required": ["mode"],
+    },
+}
+
+control_music_tool = {
+    "name": "control_music",
+    "description": (
+        "Controls the current music playback. Use for 'pausa la musica', 'continua la musica', "
+        "'siguiente cancion', 'cancion anterior', 'sube el volumen', 'baja el volumen' or setting a volume."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "command": {"type": "STRING", "description": "One of: pause, resume, stop, next, previous, volume_up, volume_down, set_volume."},
+            "volume": {"type": "INTEGER", "description": "Target volume 0-100 (only for set_volume)."},
+        },
+        "required": ["command"],
+    },
+}
+
+update_music_preferences_tool = {
+    "name": "update_music_preferences",
+    "description": "Updates the user's music preferences (favorite artists, genres, moods and default volume).",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "favorite_artists": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "favorite_genres": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "moods": {"type": "OBJECT", "description": "Map of mood name -> list of seed queries (e.g. programar, entrenar, relajarse)."},
+            "default_volume": {"type": "INTEGER", "description": "Default volume 0-100."},
+        },
+    },
+}
+
 def _openclaw_tool(name, description, properties=None, required=None):
     tool = {
         "name": name,
@@ -374,7 +422,7 @@ openclaw_tools = [
 
 OPENCLAW_TOOL_NAMES = {tool["name"] for tool in openclaw_tools}
 
-tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
+tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool, play_music_tool, control_music_tool, update_music_preferences_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
 config = types.LiveConnectConfig(
@@ -393,6 +441,11 @@ config = types.LiveConnectConfig(
         "For Spanish requests such as 'activa el modo simulacion', 'activa la simulacion', 'modo demo', or 'activa modo demo', call activate_simulation_mode. "
         "For 'desactiva el modo simulacion', 'desactivar simulacion', or 'desactiva modo demo', call deactivate_simulation_mode. "
         "For print control requests such as 'pausa la impresion', 'reanuda la impresion', or 'cancela la impresion', call pause_print, resume_print, or cancel_print. "
+        "For music requests, call play_music or control_music. Map: 'pon musica de X' -> play_music(query=X, mode=artist); "
+        "'pon la cancion X' -> play_music(query=X, mode=song); 'pon algo de rock' -> play_music(query=rock, mode=genre); "
+        "'pon musica para programar' -> play_music(query=programar, mode=mood); 'pon algo que me guste' -> play_music(mode=random); "
+        "'pausa la musica' -> control_music(command=pause); 'continua la musica' -> control_music(command=resume); "
+        "'siguiente cancion' -> control_music(command=next); 'sube el volumen' -> control_music(command=volume_up); 'baja el volumen' -> control_music(command=volume_down). "
         "You can use OpenClaw only as an internal automation and external connectivity layer. OpenClaw never answers the user. You remain Jarvis: interpret intent, decide the action, draft content, apply permissions, ask for confirmation, and answer the user. "
         "The ONLY messaging channel is WhatsApp. You cannot send email, Telegram, Slack, Discord, SMS or any other messaging channel. If the user asks to send an email or a message on any channel other than WhatsApp, politely explain that you only handle WhatsApp messaging, plus Google Calendar and LinkedIn. "
         "For WhatsApp, use local saved contacts/aliases and direct canonical phone targets when available. Do not use OpenClaw target resolution or message history reading for WhatsApp; WhatsApp messages can only be sent directly and new messages are available only from inbound events saved locally. "
@@ -2043,11 +2096,13 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status"] or fc.name in OPENCLAW_TOOL_NAMES:
+                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status", "play_music", "control_music", "update_music_preferences"] or fc.name in OPENCLAW_TOOL_NAMES:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
-                                
-                                # Check Permissions (Default to True if not set)
-                                confirmation_required = self.permissions.get(fc.name, True)
+
+                                # Check Permissions (Default to True if not set). Music tools are
+                                # safe and auto-allowed so playback never blocks on a confirmation.
+                                _music_tool = fc.name in ("play_music", "control_music", "update_music_preferences")
+                                confirmation_required = self.permissions.get(fc.name, False if _music_tool else True)
                                 
                                 if not confirmation_required:
                                     print(f"[JARVIS DEBUG] [TOOL] Permission check: '{fc.name}' -> AUTO-ALLOW")
@@ -2265,6 +2320,48 @@ class AudioLoop:
                                 elif fc.name == "get_simulation_status":
                                     state = simulation_manager.get_state()
                                     result_str = f"Simulation mode: {state['simulation_mode']}. Kasa: {state['kasa_simulation']}. Printers: {state['printer_simulation']}."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "play_music":
+                                    args = fc.args or {}
+                                    query = str(args.get("query") or "").strip()
+                                    mode = str(args.get("mode") or ("random" if not query else "search")).strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'play_music' query='{query}' mode='{mode}'")
+                                    music_result = await music_manager.play(query, mode)
+                                    if music_result.get("success"):
+                                        if music_result.get("fallback"):
+                                            result_str = f"Buscando '{music_result.get('query')}' en YouTube (sin API key, se mostrara la busqueda)."
+                                        else:
+                                            result_str = f"Reproduciendo {music_result.get('title') or query} en YouTube."
+                                    else:
+                                        result_str = music_result.get("error") or "No pude reproducir musica."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "control_music":
+                                    args = fc.args or {}
+                                    command = str(args.get("command") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'control_music' command='{command}'")
+                                    music_result = music_manager.command(command, volume=args.get("volume"))
+                                    if music_result.get("success"):
+                                        result_str = f"Comando de musica aplicado: {command} (volumen {music_result.get('volume')})."
+                                    else:
+                                        result_str = music_result.get("error") or "Comando de musica no valido."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "update_music_preferences":
+                                    args = fc.args or {}
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'update_music_preferences'")
+                                    music_manager.update_preferences(dict(args))
+                                    result_str = "Preferencias de musica actualizadas."
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )

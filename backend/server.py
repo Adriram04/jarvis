@@ -71,9 +71,14 @@ from simulation_manager import simulation_manager
 from simulators.kasa_simulator import kasa_simulator
 from simulators.printer_simulator import printer_simulator
 from workflow_manager import WorkflowManager
+from music_manager import music_manager
 
 # Create a Socket.IO server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+
+# Music events are emitted through the shared MusicManager so both HTTP endpoints
+# and the live voice tools (jarvis.py) reach the frontend via the same path.
+music_manager.set_emitter(lambda event, data: asyncio.create_task(sio.emit(event, data)))
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -1267,13 +1272,21 @@ async def _execute_automation_action(action_type, payload):
         return _openclaw_local_result("notify", f"{title}: {message}", raw={"priority": priority})
 
     if action_type == "play_music":
-        playlist = str(public_payload.get("playlist") or public_payload.get("query") or "").strip()
-        detail = f" ({playlist})" if playlist else ""
-        return _openclaw_local_result(
-            "play_music",
-            f"Reproduccion de musica solicitada{detail}. (Sin integracion de musica conectada; accion simulada.)",
-            raw={"playlist": playlist, "integration": "none"},
-        )
+        query = str(public_payload.get("query") or public_payload.get("playlist") or "").strip()
+        mode = str(public_payload.get("mode") or ("random" if not query else "search")).strip()
+        result = await music_manager.play(query, mode)
+        success = bool(result.get("success"))
+        title = result.get("title") or query or "musica"
+        summary = f"Reproduciendo: {title}." if success else (result.get("error") or "No pude reproducir musica.")
+        return _openclaw_local_result("play_music", summary, success=success, raw=result)
+
+    if action_type == "control_music":
+        command = str(public_payload.get("command") or "").strip()
+        volume = public_payload.get("volume")
+        result = music_manager.command(command, volume=volume)
+        success = bool(result.get("success"))
+        summary = f"Comando de musica: {command}." if success else (result.get("error") or "Comando de musica no valido.")
+        return _openclaw_local_result("control_music", summary, success=success, raw=result)
 
     if action_type == "open_project":
         name = str(public_payload.get("project") or public_payload.get("name") or "").strip()
@@ -2173,6 +2186,52 @@ async def api_calendar_reauth():
             "message": "Google Calendar reconectado. Recarga el calendario; si sigue fallando, reinicia JARVIS.",
         })
     return _api_error(result.get("error") or "No se pudo reconectar Google Calendar.", data=result)
+
+
+@app.get("/api/music/status")
+async def api_music_status():
+    return _api_success(music_manager.status())
+
+
+@app.get("/api/music/preferences")
+async def api_music_preferences_get():
+    return _api_success({
+        "preferences": music_manager.get_preferences(),
+        "history": music_manager.get_history(limit=30),
+    })
+
+
+@app.post("/api/music/preferences")
+async def api_music_preferences_update(data: dict = Body(default={})):
+    updated = music_manager.update_preferences(data or {})
+    return _api_success({"preferences": updated})
+
+
+@app.post("/api/music/search")
+async def api_music_search(data: dict = Body(default={})):
+    result = await music_manager.search(data.get("query", ""), data.get("mode", "search"))
+    return _api_from_openclaw_result(result) if result.get("success") is False else _api_success(result)
+
+
+@app.post("/api/music/play")
+async def api_music_play(data: dict = Body(default={})):
+    result = await music_manager.play(data.get("query", ""), data.get("mode", "search"))
+    return _api_success(result) if result.get("success") else _api_error(result.get("error") or "No se pudo reproducir.", data=result)
+
+
+@app.post("/api/music/random")
+async def api_music_random(data: dict = Body(default={})):
+    result = await music_manager.random()
+    return _api_success(result) if result.get("success") else _api_error(result.get("error") or "No se pudo reproducir.", data=result)
+
+
+@app.post("/api/music/command")
+async def api_music_command(data: dict = Body(default={})):
+    command = data.get("command")
+    if not str(command or "").strip():
+        return _api_error("command es obligatorio.", status_code=400)
+    result = music_manager.command(command, volume=data.get("volume"))
+    return _api_success(result) if result.get("success") else _api_error(result.get("error") or "Comando no valido.", data=result)
 
 
 @app.get("/api/automations")
@@ -3243,6 +3302,7 @@ async def start_audio(sid, data=None):
         audio_loop.openclaw_autopilot_manager = openclaw_autopilot_manager
         audio_loop.openclaw_targets_manager = openclaw_targets_manager
         audio_loop.openclaw_messages_manager = openclaw_messages_manager
+        audio_loop.music_manager = music_manager
 
         # Apply current permissions
         audio_loop.update_permissions(SETTINGS["tool_permissions"])

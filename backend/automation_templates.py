@@ -68,7 +68,7 @@ TEMPLATES = [
         "Rutina manual: musica, abrir proyecto y mostrar la agenda de hoy.",
         {"type": "manual"},
         [
-            {"action_type": "play_music", "payload": {"playlist": "Focus"}, "human_summary": "Poner musica de concentracion.", "stop_on_error": False},
+            {"action_type": "play_music", "payload": {"query": "programar", "mode": "mood"}, "human_summary": "Poner musica para programar.", "stop_on_error": False},
             {"action_type": "open_project", "payload": {}, "human_summary": "Abrir el proyecto activo.", "stop_on_error": False},
             {"action_type": "list_calendar_today", "payload": {}, "human_summary": "Mostrar la agenda de hoy.", "stop_on_error": False},
         ],

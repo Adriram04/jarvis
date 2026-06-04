@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Image, Linkedin, RefreshCw, Send, Users, X } from 'lucide-react';
+import { CheckCircle2, Image, Linkedin, Music, RefreshCw, Send, Users, X } from 'lucide-react';
+import MusicTab from './social/MusicTab';
 
 const API = 'http://localhost:8000';
 
@@ -20,6 +21,7 @@ const TABS = [
     { id: 'groups', label: 'Grupos', icon: <Users size={13} /> },
     { id: 'image', label: 'Enviar imagen', icon: <Image size={13} /> },
     { id: 'linkedin', label: 'LinkedIn', icon: <Linkedin size={13} /> },
+    { id: 'music', label: 'Música', icon: <Music size={13} /> },
 ];
 
 const SocialModule = ({ context, actions }) => {
@@ -378,6 +380,11 @@ const SocialModule = ({ context, actions }) => {
                         </button>
                     </div>
                 </div>
+            )}
+
+            {/* MUSIC TAB */}
+            {tab === 'music' && (
+                <MusicTab context={context} actions={actions} />
             )}
         </section>
     );
