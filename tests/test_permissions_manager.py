@@ -5,8 +5,17 @@ def test_safe_actions():
     manager = PermissionsManager()
 
     assert manager.classify("read_conversation") == "safe"
-    assert manager.classify("search_email") == "safe"
-    assert manager.requires_confirmation("draft_email") is False
+    assert manager.classify("list_calendar_events") == "safe"
+    assert manager.requires_confirmation("prepare_social_post") is False
+
+
+def test_email_actions_no_longer_safe():
+    """Email is no longer a supported channel — only WhatsApp, Calendar, LinkedIn."""
+    manager = PermissionsManager()
+
+    # Removed from SAFE_ACTIONS, so they fall through to conservative default
+    assert manager.classify("search_email") == "confirmation_required"
+    assert manager.classify("send_email") == "confirmation_required"
 
 
 def test_confirmation_required_actions():

@@ -89,12 +89,17 @@ def _make_bridge(enabled=True, api_key="test-key-abc", session_id="jarvis-main",
     bridge.session_id = session_id
     bridge.timeout_seconds = 5.0
     bridge.send_style = send_style
+    bridge._cached_session_uuid = session_id  # skip the /sessions UUID lookup in tests
     return bridge
 
 
 def run(coro):
-    """Run a coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run a coroutine synchronously on a fresh event loop (test isolation safe)."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------

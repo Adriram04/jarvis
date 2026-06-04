@@ -31,13 +31,15 @@ def test_generic_whatsapp_send_tool_creates_local_pending_action(tmp_path):
     )
 
     assert result["success"] is False
-    assert "Confirmalo" in result["summary"]
     assert "confirmation_required" in result["warnings"]
+    assert "whatsapp_local_pending_action" in result["warnings"]
     pending = loop.pending_actions_manager.get_pending_actions()[0]
     assert pending["payload"]["canonical_target"] == "+34722129717"
     assert pending["payload"]["display_target"] == "Laura"
     assert confirmations[0]["id"] == pending["id"]
+    # User-facing confirmation text is delivered via the transcription callback
     assert "Laura" in transcriptions[0]["text"]
+    assert "Confirmalo" in transcriptions[0]["text"]
 
 
 def test_generic_whatsapp_send_tool_does_not_duplicate_existing_pending_action(tmp_path):
@@ -100,7 +102,7 @@ def test_non_whatsapp_tool_is_not_blocked():
 
     result = loop._blocked_whatsapp_openclaw_tool_result(
         "openclaw_execute_action",
-        {"action_type": "search_email", "payload": {"query": "hello"}},
+        {"action_type": "list_calendar_events", "payload": {}},
     )
 
     assert result is None

@@ -319,8 +319,8 @@ openclaw_tools = [
         "openclaw_send_message",
         "Queues or sends a message to a configured messaging channel. Requires confirmation before sending.",
         {
-            "channel": {"type": "STRING", "description": "Channel such as whatsapp, telegram, slack, or discord."},
-            "target": {"type": "STRING", "description": "Contact, group, channel, or conversation target."},
+            "channel": {"type": "STRING", "description": "Always 'whatsapp'. JARVIS only sends messages via WhatsApp."},
+            "target": {"type": "STRING", "description": "WhatsApp contact or group target."},
             "message": {"type": "STRING", "description": "Message drafted by Jarvis."},
         },
         ["channel", "target", "message"],
@@ -345,9 +345,6 @@ openclaw_tools = [
         },
         ["channel", "target"],
     ),
-    _openclaw_tool("openclaw_search_email", "Searches configured email through Jarvis external automation.", {"query": {"type": "STRING"}, "max_results": {"type": "INTEGER"}}, ["query"]),
-    _openclaw_tool("openclaw_draft_email", "Creates an email draft. Safe because it does not send.", {"payload": {"type": "OBJECT"}}, ["payload"]),
-    _openclaw_tool("openclaw_send_email", "Queues or sends an email-like action. Requires confirmation before sending.", {"payload": {"type": "OBJECT"}}, ["payload"]),
     _openclaw_tool("openclaw_list_calendar_events", "Lists calendar events through configured calendar automation.", {"payload": {"type": "OBJECT"}}),
     _openclaw_tool("openclaw_calendar_action", "Runs a calendar action such as create, update, delete, or list.", {"action": {"type": "STRING"}, "payload": {"type": "OBJECT"}}, ["action", "payload"]),
     _openclaw_tool("openclaw_prepare_social_post", "Prepares or adapts social content without publishing.", {"payload": {"type": "OBJECT"}}, ["payload"]),
@@ -397,11 +394,12 @@ config = types.LiveConnectConfig(
         "For 'desactiva el modo simulacion', 'desactivar simulacion', or 'desactiva modo demo', call deactivate_simulation_mode. "
         "For print control requests such as 'pausa la impresion', 'reanuda la impresion', or 'cancela la impresion', call pause_print, resume_print, or cancel_print. "
         "You can use OpenClaw only as an internal automation and external connectivity layer. OpenClaw never answers the user. You remain Jarvis: interpret intent, decide the action, draft content, apply permissions, ask for confirmation, and answer the user. "
+        "The ONLY messaging channel is WhatsApp. You cannot send email, Telegram, Slack, Discord, SMS or any other messaging channel. If the user asks to send an email or a message on any channel other than WhatsApp, politely explain that you only handle WhatsApp messaging, plus Google Calendar and LinkedIn. "
         "For WhatsApp, use local saved contacts/aliases and direct canonical phone targets when available. Do not use OpenClaw target resolution or message history reading for WhatsApp; WhatsApp messages can only be sent directly and new messages are available only from inbound events saved locally. "
-        "Do not implement or use direct integrations for Gmail, Calendar, WhatsApp Web, Instagram, LinkedIn, X/Twitter, Telegram, Slack, Discord, Notion, or GitHub; all external messaging, email, calendar, social, workflow, and skill actions must go through OpenClawBridge. "
-        "Never send messages, emails, posts, invitations, cancellations, or automatic replies without explicit user confirmation, unless there is a previously authorized limited autopilot rule. "
+        "Your external capabilities are limited to: WhatsApp messaging, Google Calendar events, and LinkedIn posts. All of these go through OpenClawBridge / OpenWA. "
+        "Never send WhatsApp messages, LinkedIn posts, calendar invitations, cancellations, or automatic replies without explicit user confirmation, unless there is a previously authorized limited autopilot rule. "
         "Before sensitive actions, show the service or channel, recipient/group/platform, content, date/time if relevant, and exact action. After execution, answer in first person as Jarvis. Do not say that OpenClaw is speaking or quote OpenClaw as the final responder. "
-        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, messaging, authorized automatic replies, email, calendar, social posts, workflows, controlled automations, and pending confirmations. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
+        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, WhatsApp messaging, authorized automatic replies, Google Calendar, LinkedIn posts, controlled automations, and pending confirmations. Do not mention email, Telegram or other channels. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
         "Your creator is Adrián, and you address him as 'Sir'. "
         "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
         "You have a fun personality.",
@@ -1590,14 +1588,6 @@ class AudioLoop:
             return "send_message", {"channel": args.get("channel"), "target": args.get("target"), "message": args.get("message")}
         if name == "openclaw_read_conversation":
             return "read_conversation", {"channel": args.get("channel"), "target": args.get("target"), "limit": args.get("limit", 10)}
-        if name == "openclaw_search_email":
-            return "search_email", {"service": "email", "query": args.get("query"), "max_results": args.get("max_results", 10)}
-        if name == "openclaw_draft_email":
-            return "draft_email", args.get("payload") or {}
-        if name == "openclaw_send_email":
-            payload = args.get("payload") or {}
-            payload["action_type"] = payload.get("action_type", "send_email")
-            return payload["action_type"], payload
         if name == "openclaw_list_calendar_events":
             return "list_calendar_events", args.get("payload") or {}
         if name == "openclaw_calendar_action":

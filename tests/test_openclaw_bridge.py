@@ -357,11 +357,12 @@ def test_execute_action_never_uses_openclaw_run(monkeypatch):
     assert all(not args or args[0] != "run" for args in commands)
 
 
-def test_email_calendar_social_without_generic_method_returns_missing_method(monkeypatch):
+def test_unsupported_action_returns_missing_method(monkeypatch):
     monkeypatch.setenv("JARVIS_OPENCLAW_ENABLED", "true")
     monkeypatch.delenv("JARVIS_OPENCLAW_GENERIC_CALL_METHOD", raising=False)
     bridge = OpenClawBridge()
 
+    # Email is no longer supported (only WhatsApp, Calendar, LinkedIn)
     result = asyncio.run(bridge.execute_action("send_email", {"to": "a@example.com"}))
 
     assert result["success"] is False
@@ -379,7 +380,8 @@ def test_generic_fallback_uses_gateway_call_method(monkeypatch):
         return {"success": True, "stdout": json.dumps({"success": True, "details": "done"}), "returncode": 0, "command": ["openclaw", *args]}
 
     monkeypatch.setattr(bridge, "_run_cli", fake_run_cli)
-    result = asyncio.run(bridge.execute_action("send_email", {"to": "a@example.com"}))
+    # run_workflow is the only purely-generic supported action
+    result = asyncio.run(bridge.execute_action("run_workflow", {"workflow_name": "demo"}))
 
     assert seen["args"][:3] == ["gateway", "call", "jarvis.execute"]
     assert "--params" in seen["args"]

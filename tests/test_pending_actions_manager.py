@@ -17,7 +17,7 @@ def test_create_pending_action(tmp_path):
 
 def test_confirm_action(tmp_path):
     manager = PendingActionsManager(tmp_path / "pending.json")
-    action = manager.create_pending_action("send_email", {"to": "a@example.com"}, "Enviar correo")
+    action = manager.create_pending_action("send_message", {"channel": "whatsapp", "target": "+34600111222", "message": "Hola"}, "Enviar WhatsApp")
 
     confirmed = manager.confirm_action(action["id"])
 
@@ -27,7 +27,7 @@ def test_confirm_action(tmp_path):
 
 def test_cancel_action(tmp_path):
     manager = PendingActionsManager(tmp_path / "pending.json")
-    action = manager.create_pending_action("send_email", {}, "Enviar correo")
+    action = manager.create_pending_action("send_message", {}, "Enviar WhatsApp")
 
     cancelled = manager.cancel_action(action["id"])
 

@@ -36,11 +36,9 @@ PRODUCTIVITY_ACTIONS = {
     "schedule_social_post",
     "publish_social_post",
 }
+# Email/Telegram/other channels are intentionally NOT supported.
+# JARVIS only handles WhatsApp messaging plus Google Calendar and LinkedIn.
 GENERIC_SUPPORTED_ACTIONS = {
-    "search_email",
-    "draft_email",
-    "send_email",
-    "reply_email",
     "list_calendar_events",
     "create_calendar_event",
     "update_calendar_event",
@@ -49,8 +47,6 @@ GENERIC_SUPPORTED_ACTIONS = {
     "schedule_social_post",
     "publish_social_post",
     "run_workflow",
-    "search_items",
-    "draft_content",
 }
 
 

@@ -69,6 +69,9 @@ def openclaw_voice_flow(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "openclaw_bridge", bridge)
     monkeypatch.setattr(server, "audio_loop", loop)
     monkeypatch.setattr(server.sio, "emit", fake_emit)
+    # These tests target the OpenClaw legacy send path; pin the provider so the
+    # WhatsApp routing in _execute_openclaw_action goes to the mocked openclaw_bridge.
+    monkeypatch.setenv("JARVIS_WHATSAPP_PROVIDER", "openclaw")
     return targets, messages, pending, loop, emissions, bridge
 
 
