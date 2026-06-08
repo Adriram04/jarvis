@@ -15,9 +15,15 @@ from typing import List, Optional
 
 load_dotenv()
 
-DEFAULT_CAD_SCRIPT_TIMEOUT_SECONDS = 30
+DEFAULT_CAD_SCRIPT_TIMEOUT_SECONDS = 45
 DEFAULT_CAD_MODEL = "gemini-2.5-flash"
 DEFAULT_CAD_FALLBACK_MODELS = "gemini-2.5-flash-lite"
+# More reasoning headroom helps the (free) flash model design complex parts
+# correctly. Flash supports a dynamic thinking budget; -1 = let the model
+# decide, a positive value caps it. Tunable via env without changing models.
+DEFAULT_CAD_THINKING_BUDGET = -1
+# More self-correction passes = better final geometry without a pricier model.
+DEFAULT_CAD_MAX_RETRIES = 4
 BLOCKED_GENERATED_CODE_IMPORTS = {
     "ctypes",
     "importlib",
@@ -45,61 +51,148 @@ class CadAgent:
         # when the primary model is temporarily saturated.
         self.models = self._resolve_model_list()
         self.model = self.models[0]
-        self.on_thought = on_thought  # Callback for streaming thoughts 
+        self.on_thought = on_thought  # Callback for streaming thoughts
         self.on_status = on_status  # Callback for retry status info
         self.script_timeout_seconds = self._resolve_script_timeout_seconds()
+        self.thinking_budget = self._resolve_int_env(
+            "JARVIS_CAD_THINKING_BUDGET", DEFAULT_CAD_THINKING_BUDGET
+        )
+        self.max_retries = max(1, self._resolve_int_env(
+            "JARVIS_CAD_MAX_RETRIES", DEFAULT_CAD_MAX_RETRIES
+        ))
         
         self.system_instruction = """
-You are a Python-based 3D CAD Engineer using the `build123d` library.
-Your goal is to write a Python script that generates a 3D model based on the user's request.
+You are a senior mechanical/CAD engineer who writes Python scripts with the
+`build123d` library to produce models that will be 3D printed on a normal FDM
+printer. Your output must be both syntactically correct AND physically
+printable and useful in the real world.
 
-Requirements:
+## DESIGN PROCESS (think before coding)
+Before writing code, plan the part:
+1. Decompose the object into simple primitive solids (boxes, cylinders,
+   wedges) and features (holes, fillets, ribs). A "phone stand", "bracket" or
+   "robot arm" is just a few primitives fused together plus some cuts.
+2. Pick realistic real-world dimensions in millimetres for the named object.
+   Examples of sensible defaults:
+   - Phone stand: base ~80x70mm, back rest leaning ~65deg, a lip ~8mm tall to
+     hold the phone, a slot/cutout for the charging cable.
+   - Wall/desk bracket: L-shaped, legs ~40-60mm, thickness ~5mm, M3/M4 screw
+     holes (3.4mm / 4.5mm) with a reinforcing rib in the corner.
+   - Robot arm segment / gripper: linked rectangular links ~60-100mm with pin
+     holes at the joints (clearance ~0.4mm around 4-5mm pins).
+3. Define all key dimensions as named variables at the TOP of the script so the
+   geometry is parametric and easy to fix.
+4. Build each feature, then make sure everything fuses into ONE watertight
+   solid.
+
+## 3D-PRINTABILITY RULES (very important - the model must actually print)
+- The build plate is the XY plane. Orient the part so it has a FLAT face that
+  rests on the bed for good adhesion. Prefer giving the part a flat bottom
+  rather than balancing it on a point or a curved face.
+- Avoid unsupported overhangs steeper than ~45deg from vertical. Add chamfers,
+  fillets or support ribs/gussets so steep features can print without supports.
+  For a leaning back-rest, add a triangular gusset/leg underneath it.
+- Minimum wall thickness >= 1.6mm. Minimum free-standing pin/peg diameter
+  >= 3mm. Do not create paper-thin or hair-thin features; they will fail.
+- NO floating or disconnected geometry. Every piece must physically connect to
+  the rest of the body (overlap solids slightly before fusing, e.g. embed a
+  joining face by ~0.5-1mm so the boolean union is robust).
+- Screw/bolt holes: use clearance diameters (M3 ~3.4mm, M4 ~4.5mm). Round small
+  internal corners with small fillets to reduce stress concentrations.
+- If the request implies multiple SEPARATE printed pieces (e.g. an assembly),
+  lay them out side by side on the plate (translate them apart in X/Y so they
+  do NOT overlap) and fuse them all into the single `result_part` so they
+  export together but print as distinct pieces with clearance between them.
+
+## build123d API RULES
 1. Start with `from build123d import *`.
-2. Include `import numpy as np` if you use any numpy functions (like `np.sign`, `np.pi`).
+2. Add `import numpy as np` ONLY if you actually use numpy.
 3. You MUST assign the final object to a variable named `result_part`.
-4. If you create a sketch or line, extrude it to make it a solid `Part`.
-5. The model should be centered at (0,0,0) and have reasonable dimensions (mm).
-6. **IMPORTANT**: Do NOT use old or PascalCase function names for core operations.
-   - Use `make_face()` instead of `MakeFace()`.
-   - Use `extrude()` instead of `Extrude()`.
-   - Use `fillet()` instead of `Fillet()`.
-   - Use `chamfer()` instead of `Chamfer()`.
-   - Use `revolve()` instead of `Revolve()`.
-   - Use `loft()` instead of `Loft()`.
-   - Use `sweep()` instead of `Sweep()`.
-   - Use `offset()` instead of `Offset()`.
-   - generally prefer lowercase builder methods inside contexts.
+4. Extrude/revolve/loft any sketch or wire into a solid `Part`; never leave the
+   result as a 2D sketch.
+5. Use lowercase builder methods, NOT PascalCase: `make_face()`, `extrude()`,
+   `fillet()`, `chamfer()`, `revolve()`, `loft()`, `sweep()`, `offset()`.
+6. To cut holes/pockets, subtract primitives inside the SAME `BuildPart`
+   context with `mode=Mode.SUBTRACT`. Do NOT nest a second BuildPart for holes.
+7. To add material, build in the same context (default ADD) or fuse parts with
+   `+`. Keep joining solids overlapping so the union stays watertight.
+8. `fillet()`/`chamfer()` CRASH if the radius is too large for the adjacent
+   geometry. Keep radii conservative (0.5-2mm) and only fillet edges you are
+   sure about. Wrap risky fillets in try/except and continue if they fail, so a
+   cosmetic fillet never aborts the whole model.
+9. Do not access `v.X`/`v.Y`/`v.Z` unless `v` is definitely a Vector.
 
-7. **Vector Access**: Do NOT access vector components like `v.X`, `v.Y`, `v.Z` unless you are sure they exist (use `v.X` etc on Vector objects, but ensure they are Vectors).
-8. **Final Output**: The script MUST end by exporting the final part to an STL file named 'output.stl'.
-   - `export_stl(result_part, 'output.stl')`
+## FINAL OUTPUT
+- The script MUST end by exporting the final solid to 'output.stl':
+  `export_stl(result_part, 'output.stl')`
+- Return the script inside a single ```python ... ``` block.
 
-9. **Robustness**: Operations like `fillet()` and `chamfer()` will crash if the radius is too large for the geometry.
-   - Use conservative values (e.g., 0.5mm to 2mm) unless you are certain of the dimensions.
-   - If a fillet is purely aesthetic, keep it small to ensure success.
+## EXAMPLES
 
-        For rectangular plates/supports with through holes, subtract cylinders
-        directly inside the same BuildPart context. Do NOT create a nested
-        BuildPart for holes:
-        ```python
-        from build123d import *
+Rectangular support plate with through holes (single context, no nested
+BuildPart):
+```python
+from build123d import *
 
-        with BuildPart() as p:
-            Box(80, 40, 8)
-            with Locations((-30, -10, 0), (-30, 10, 0), (30, -10, 0), (30, 10, 0)):
-                Cylinder(radius=3, height=20, mode=Mode.SUBTRACT)
+plate_l, plate_w, plate_t = 80, 40, 8
+hole_r = 3
 
-        result_part = p.part
-        export_stl(result_part, 'output.stl')
-        ```
+with BuildPart() as p:
+    Box(plate_l, plate_w, plate_t)
+    with Locations((-30, -10, 0), (-30, 10, 0), (30, -10, 0), (30, 10, 0)):
+        Cylinder(radius=hole_r, height=plate_t * 3, mode=Mode.SUBTRACT)
+    try:
+        fillet(p.edges().filter_by(Axis.Z), radius=1)
+    except Exception:
+        pass
 
-        Example Script:
-        ```python
-        from build123d import *
+result_part = p.part
+export_stl(result_part, 'output.stl')
+```
 
-        with BuildPart() as p:
-            Box(10, 10, 10)
-            fillet(p.edges(), radius=1)
+Phone stand (flat base + solid angled back that prints support-free + front
+lip + cable slot). Note how the inclined support is a SOLID right-triangle
+prism built from a 2D profile, so there is nothing floating to support:
+```python
+from build123d import *
+import math
+
+base_w, base_d, base_t = 80, 75, 6     # width(X) x depth(Y) x thickness(Z)
+back_h = 70                            # height of the angled back support
+back_angle = 65                        # phone leans 65deg from horizontal
+lip_h, lip_t = 10, 6                   # front lip that stops the phone sliding
+
+back_run = back_h / math.tan(math.radians(back_angle))  # depth of the incline
+
+with BuildPart() as p:
+    # Flat base for good bed adhesion
+    Box(base_w, base_d, base_t)
+
+    # Angled back support as a SOLID right-triangle prism (prints support-free).
+    # The profile lives in the Y-Z plane and is extruded across the width (X).
+    with BuildSketch(Plane.YZ) as profile:
+        with BuildLine():
+            Polyline(
+                (base_d / 2, base_t / 2),               # rear bottom
+                (base_d / 2, base_t / 2 + back_h),      # rear top
+                (base_d / 2 - back_run, base_t / 2),    # front bottom
+                close=True,
+            )
+        make_face()
+    extrude(amount=base_w / 2, both=True)
+
+    # Front lip
+    with Locations((0, -base_d / 2 + lip_t / 2, base_t / 2 + lip_h / 2)):
+        Box(base_w, lip_t, lip_h)
+
+    # Cable slot through the base
+    with Locations((0, 0, 0)):
+        Cylinder(radius=6, height=base_t * 3, mode=Mode.SUBTRACT)
+
+    try:
+        fillet(p.edges().filter_by(Axis.Z), radius=1.5)
+    except Exception:
+        pass
 
 result_part = p.part
 export_stl(result_part, 'output.stl')
@@ -118,6 +211,16 @@ export_stl(result_part, 'output.stl')
             return DEFAULT_CAD_SCRIPT_TIMEOUT_SECONDS
 
         return max(1, timeout)
+
+    def _resolve_int_env(self, env_name, default):
+        raw_value = os.getenv(env_name)
+        if raw_value is None or raw_value == "":
+            return default
+        try:
+            return int(raw_value)
+        except ValueError:
+            print(f"[CadAgent DEBUG] [WARN] Invalid {env_name}='{raw_value}'. Using default {default}.")
+            return default
 
     def _resolve_model_list(self):
         primary_model = os.getenv("JARVIS_CAD_MODEL", DEFAULT_CAD_MODEL).strip()
@@ -154,7 +257,10 @@ export_stl(result_part, 'output.stl')
                     config=types.GenerateContentConfig(
                         system_instruction=self.system_instruction,
                         temperature=1.0,
-                        thinking_config=types.ThinkingConfig(include_thoughts=True)
+                        thinking_config=types.ThinkingConfig(
+                            include_thoughts=True,
+                            thinking_budget=self.thinking_budget,
+                        )
                     )
                 )
 
@@ -394,8 +500,15 @@ export_stl(result_part, {output_filename!r})
             output_stl = os.path.join(work_dir, f"output_{timestamp}.stl")
             script_path = os.path.join(work_dir, "current_design.py")
 
-            max_retries = 3
-            current_prompt = f"You are a build123d expert. Write a generic python script to create a 3D model of: {prompt}. Ensure you export to 'output.stl'. Unscaled."
+            max_retries = self.max_retries
+            current_prompt = (
+                f"Design and write a build123d Python script for a 3D-PRINTABLE model of: {prompt}.\n"
+                "First plan the part: decompose it into primitive solids and features, choose realistic "
+                "real-world dimensions in millimetres, and define them as named variables at the top. "
+                "Make sure the result is a single watertight solid with a flat base for the print bed, no "
+                "unsupported steep overhangs, and walls/pins thick enough to print. "
+                "Export to 'output.stl'."
+            )
             
             for attempt in range(max_retries):
                 print(f"[CadAgent DEBUG] Attempt {attempt + 1}/{max_retries}")
@@ -570,7 +683,7 @@ Original request: {prompt}
 
         try:
 
-            max_retries = 3
+            max_retries = self.max_retries
             current_prompt = f"""
 You are iterating on an existing 3D model script.
 
