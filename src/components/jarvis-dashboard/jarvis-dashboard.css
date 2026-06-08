@@ -3183,3 +3183,624 @@
     color: var(--jarvis-cyan);
     font-weight: 600;
 }
+
+/* ================================ Tareas ================================== */
+.jarvis-module-header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.jarvis-module-button.is-primary {
+    background: linear-gradient(120deg, var(--jarvis-cyan), var(--jarvis-blue));
+    color: #04121b;
+    border-color: transparent;
+    font-weight: 600;
+}
+
+.jarvis-tasks-summary {
+    display: flex;
+    gap: 20px;
+    margin: 4px 0 16px;
+    color: var(--jarvis-muted);
+    font-size: 13px;
+}
+
+.jarvis-tasks-summary strong {
+    color: var(--jarvis-text);
+}
+
+.jarvis-tasks-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+}
+
+.jarvis-task-card {
+    border: 1px solid var(--jarvis-border);
+    border-radius: 16px;
+    padding: 16px;
+    background: var(--jarvis-panel);
+    cursor: pointer;
+    transition: transform 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.jarvis-task-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--jarvis-cyan);
+    background: var(--jarvis-panel-strong);
+}
+
+.jarvis-task-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.jarvis-task-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--jarvis-cyan);
+    min-width: 0;
+}
+
+.jarvis-task-card-title strong {
+    color: var(--jarvis-text);
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jarvis-task-card-delete {
+    border: none;
+    background: transparent;
+    color: var(--jarvis-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.jarvis-task-card-delete:hover {
+    color: #ff8a8a;
+    background: rgba(255, 70, 70, 0.1);
+}
+
+.jarvis-task-card-desc {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--jarvis-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.jarvis-task-card-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--jarvis-muted);
+}
+
+.jarvis-task-card-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--jarvis-cyan);
+}
+
+/* Progress bar */
+.jarvis-task-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.jarvis-task-progress-track {
+    flex: 1;
+    height: 8px;
+    border-radius: 6px;
+    background: rgba(148, 163, 184, 0.16);
+    overflow: hidden;
+}
+
+.jarvis-task-progress-fill {
+    height: 100%;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--jarvis-cyan), var(--jarvis-blue));
+    transition: width 0.3s ease;
+}
+
+.jarvis-task-progress-track.is-complete .jarvis-task-progress-fill {
+    background: linear-gradient(90deg, var(--jarvis-green), var(--jarvis-cyan));
+}
+
+.jarvis-task-progress-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--jarvis-text);
+    min-width: 34px;
+    text-align: right;
+}
+
+/* Empty state */
+.jarvis-tasks-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--jarvis-muted);
+}
+
+.jarvis-tasks-empty strong {
+    color: var(--jarvis-text);
+    font-size: 16px;
+}
+
+.jarvis-tasks-empty > svg {
+    color: var(--jarvis-cyan);
+    opacity: 0.7;
+}
+
+/* Detail view */
+.jarvis-task-detail {
+    border: 1px solid var(--jarvis-border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    background: var(--jarvis-panel);
+}
+
+.jarvis-task-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.jarvis-task-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: var(--jarvis-cyan);
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.jarvis-task-detail-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.jarvis-task-detail-actions button {
+    border: 1px solid var(--jarvis-border);
+    background: transparent;
+    color: var(--jarvis-muted);
+    border-radius: 9px;
+    padding: 6px 8px;
+    cursor: pointer;
+}
+
+.jarvis-task-detail-actions button:hover {
+    color: var(--jarvis-text);
+    border-color: var(--jarvis-cyan);
+}
+
+.jarvis-task-detail-actions button.is-danger:hover {
+    color: #ff8a8a;
+    border-color: rgba(255, 90, 90, 0.5);
+}
+
+.jarvis-task-detail-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0 4px;
+}
+
+.jarvis-task-detail-titlebar h2 {
+    margin: 0;
+    color: var(--jarvis-text);
+    font-size: 22px;
+}
+
+.jarvis-task-title-edit {
+    flex: 1;
+    font-size: 20px;
+    background: rgba(5, 7, 13, 0.4);
+    border: 1px solid var(--jarvis-cyan);
+    border-radius: 10px;
+    padding: 6px 10px;
+    color: var(--jarvis-text);
+    outline: none;
+}
+
+.jarvis-inline-save {
+    border: none;
+    background: var(--jarvis-cyan);
+    color: #04121b;
+    border-radius: 8px;
+    padding: 7px;
+    cursor: pointer;
+}
+
+.jarvis-task-detail-desc {
+    color: var(--jarvis-muted);
+    font-size: 13px;
+    margin: 4px 0 14px;
+}
+
+.jarvis-task-detail-progress {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+}
+
+.jarvis-task-detail-progress > span {
+    font-size: 12px;
+    color: var(--jarvis-muted);
+    white-space: nowrap;
+}
+
+/* Recommend */
+.jarvis-task-recommend {
+    margin-bottom: 16px;
+}
+
+.jarvis-task-recommend-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--jarvis-purple);
+    background: rgba(123, 97, 255, 0.12);
+    color: #c4b6ff;
+    border-radius: 12px;
+    padding: 9px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.jarvis-task-recommend-btn:hover:not(:disabled) {
+    background: rgba(123, 97, 255, 0.22);
+}
+
+.jarvis-task-recommend-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.jarvis-task-recommend-result {
+    margin-top: 12px;
+    border: 1px solid rgba(123, 97, 255, 0.3);
+    border-radius: 12px;
+    padding: 12px 16px;
+    background: rgba(123, 97, 255, 0.06);
+}
+
+.jarvis-task-recommend-msg {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #c4b6ff;
+}
+
+.jarvis-task-recommend-result ol {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.jarvis-task-recommend-result li {
+    font-size: 13px;
+    color: var(--jarvis-text);
+}
+
+.jarvis-task-recommend-result li span {
+    color: var(--jarvis-muted);
+}
+
+/* Subtasks */
+.jarvis-subtask-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+
+.jarvis-subtask {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--jarvis-border);
+    border-radius: 11px;
+    background: rgba(5, 7, 13, 0.32);
+}
+
+.jarvis-subtask.is-done {
+    opacity: 0.6;
+    border-color: rgba(0, 255, 147, 0.22);
+}
+
+.jarvis-subtask-check {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    border: 1.5px solid var(--jarvis-muted);
+    background: transparent;
+    color: #04121b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.jarvis-subtask.is-done .jarvis-subtask-check {
+    background: var(--jarvis-green);
+    border-color: var(--jarvis-green);
+}
+
+.jarvis-subtask-title {
+    flex: 1;
+    font-size: 14px;
+    color: var(--jarvis-text);
+    cursor: text;
+    word-break: break-word;
+}
+
+.jarvis-subtask.is-done .jarvis-subtask-title {
+    text-decoration: line-through;
+    color: var(--jarvis-muted);
+}
+
+.jarvis-subtask-edit {
+    flex: 1;
+    font-size: 14px;
+    background: rgba(5, 7, 13, 0.5);
+    border: 1px solid var(--jarvis-cyan);
+    border-radius: 8px;
+    padding: 5px 8px;
+    color: var(--jarvis-text);
+    outline: none;
+}
+
+.jarvis-subtask-meta {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.jarvis-subtask-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.14);
+    color: var(--jarvis-muted);
+    white-space: nowrap;
+}
+
+.jarvis-subtask-chip.priority-high { background: rgba(255, 90, 90, 0.16); color: #ff9a9a; }
+.jarvis-subtask-chip.priority-medium { background: rgba(255, 196, 0, 0.16); color: #ffd66b; }
+.jarvis-subtask-chip.priority-low { background: rgba(0, 229, 255, 0.14); color: var(--jarvis-cyan); }
+
+.jarvis-subtask-actions {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.jarvis-subtask-actions button {
+    border: none;
+    background: transparent;
+    color: var(--jarvis-muted);
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 7px;
+}
+
+.jarvis-subtask-actions button:hover {
+    color: var(--jarvis-text);
+    background: rgba(148, 163, 184, 0.12);
+}
+
+/* Add subtask form */
+.jarvis-add-subtask {
+    border-top: 1px solid var(--jarvis-border);
+    padding-top: 14px;
+}
+
+.jarvis-add-subtask-row {
+    display: flex;
+    gap: 8px;
+}
+
+.jarvis-add-subtask-row input {
+    flex: 1;
+    border: 1px solid var(--jarvis-border);
+    border-radius: 10px;
+    background: rgba(5, 7, 13, 0.4);
+    color: var(--jarvis-text);
+    padding: 9px 12px;
+    font-size: 14px;
+    outline: none;
+}
+
+.jarvis-add-subtask-row input:focus {
+    border-color: var(--jarvis-cyan);
+}
+
+.jarvis-add-subtask-meta-toggle {
+    border: 1px solid var(--jarvis-border);
+    background: transparent;
+    color: var(--jarvis-muted);
+    border-radius: 10px;
+    padding: 0 11px;
+    cursor: pointer;
+}
+
+.jarvis-add-subtask-meta-toggle.is-active {
+    color: var(--jarvis-cyan);
+    border-color: var(--jarvis-cyan);
+}
+
+.jarvis-add-subtask-submit {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    border-radius: 10px;
+    padding: 9px 16px;
+    background: linear-gradient(120deg, var(--jarvis-cyan), var(--jarvis-blue));
+    color: #04121b;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.jarvis-add-subtask-submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.jarvis-add-subtask-meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.jarvis-add-subtask-meta select,
+.jarvis-add-subtask-meta input {
+    border: 1px solid var(--jarvis-border);
+    border-radius: 10px;
+    background: rgba(5, 7, 13, 0.4);
+    color: var(--jarvis-text);
+    padding: 8px 10px;
+    font-size: 13px;
+    outline: none;
+}
+
+.jarvis-add-subtask-meta input {
+    flex: 1;
+}
+
+/* Create task modal */
+.jarvis-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(3, 5, 10, 0.66);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.jarvis-modal {
+    width: 100%;
+    max-width: 440px;
+    border: 1px solid var(--jarvis-border);
+    border-radius: 18px;
+    background: var(--jarvis-panel-strong);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+.jarvis-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--jarvis-border);
+}
+
+.jarvis-modal-header h3 {
+    margin: 0;
+    color: var(--jarvis-text);
+    font-size: 17px;
+}
+
+.jarvis-modal-header button {
+    border: none;
+    background: transparent;
+    color: var(--jarvis-muted);
+    cursor: pointer;
+}
+
+.jarvis-modal-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.jarvis-modal-body label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--jarvis-muted);
+}
+
+.jarvis-modal-body input,
+.jarvis-modal-body textarea {
+    border: 1px solid var(--jarvis-border);
+    border-radius: 10px;
+    background: rgba(5, 7, 13, 0.4);
+    color: var(--jarvis-text);
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+}
+
+.jarvis-modal-body input:focus,
+.jarvis-modal-body textarea:focus {
+    border-color: var(--jarvis-cyan);
+}
+
+.jarvis-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.jarvis-modal-cancel {
+    border: 1px solid var(--jarvis-border);
+    background: transparent;
+    color: var(--jarvis-muted);
+    border-radius: 10px;
+    padding: 9px 16px;
+    cursor: pointer;
+}
+
+.jarvis-modal-confirm {
+    border: none;
+    border-radius: 10px;
+    padding: 9px 18px;
+    background: linear-gradient(120deg, var(--jarvis-cyan), var(--jarvis-blue));
+    color: #04121b;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.jarvis-modal-confirm:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

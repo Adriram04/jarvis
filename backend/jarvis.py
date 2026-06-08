@@ -29,6 +29,7 @@ from google import genai
 from google.genai import types
 from simulation_manager import simulation_manager
 from music_manager import music_manager
+from task_manager import task_manager
 from simulators.kasa_simulator import kasa_simulator
 from simulators.printer_simulator import printer_simulator
 
@@ -160,6 +161,96 @@ ingest_document_tool = {
             "file_path": {"type": "STRING", "description": "Absolute or relative path to the document to ingest."}
         },
         "required": ["file_path"]
+    }
+}
+
+create_task_tool = {
+    "name": "create_task",
+    "description": (
+        "Creates a new main task (a checklist/process made of subtasks). Use when "
+        "the user says things like 'crea una tarea llamada X', 'nueva tarea X', "
+        "'crea una lista de tareas para X'."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "title": {"type": "STRING", "description": "The name of the task, e.g. 'Tareas para la fiesta'."},
+            "description": {"type": "STRING", "description": "Optional extra detail about the task."}
+        },
+        "required": ["title"]
+    }
+}
+
+add_subtask_tool = {
+    "name": "add_subtask",
+    "description": (
+        "Adds a subtask (a step) to an existing task. Use for 'añade la subtarea Y a "
+        "la tarea X', 'apunta Y en la lista de X'. Resolve the task by its name."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "task": {"type": "STRING", "description": "Name (or id) of the task to add the subtask to."},
+            "title": {"type": "STRING", "description": "The subtask text, e.g. 'Comprar comida'."},
+            "estimated_duration": {"type": "STRING", "description": "Optional estimate like '2h' or '30 min'."},
+            "priority": {"type": "STRING", "description": "Optional priority: low, medium or high."}
+        },
+        "required": ["task", "title"]
+    }
+}
+
+set_subtask_status_tool = {
+    "name": "set_subtask_status",
+    "description": (
+        "Marks a subtask as completed or pending. Use for 'marca como completada Y', "
+        "'ya he hecho Y', 'desmarca Y', 'Y está pendiente otra vez'."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "task": {"type": "STRING", "description": "Name (or id) of the task that contains the subtask."},
+            "subtask": {"type": "STRING", "description": "Name (or id) of the subtask to update."},
+            "completed": {"type": "BOOLEAN", "description": "true to mark completed, false to mark pending."}
+        },
+        "required": ["task", "subtask", "completed"]
+    }
+}
+
+list_tasks_tool = {
+    "name": "list_tasks",
+    "description": "Lists all tasks with their progress. Use for 'qué tareas tengo', 'enséñame mis tareas/listas'.",
+    "parameters": {"type": "OBJECT", "properties": {}}
+}
+
+get_task_status_tool = {
+    "name": "get_task_status",
+    "description": (
+        "Returns the progress percentage and the pending/completed subtasks of a task. "
+        "Use for 'qué porcentaje llevo de X', 'cómo voy con X', 'qué me queda pendiente de X', "
+        "'muéstrame las pendientes de X'."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "task": {"type": "STRING", "description": "Name (or id) of the task."}
+        },
+        "required": ["task"]
+    }
+}
+
+recommend_task_order_tool = {
+    "name": "recommend_task_order",
+    "description": (
+        "Recommends the best order to do the pending subtasks of a task, considering "
+        "urgency, estimated time and logical dependencies. Use for '¿qué me recomiendas "
+        "hacer primero?', '¿por dónde empiezo con X?', 'ordéname las tareas de X'."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "task": {"type": "STRING", "description": "Name (or id) of the task to plan."}
+        },
+        "required": ["task"]
     }
 }
 
@@ -480,7 +571,7 @@ openclaw_tools = [
 
 OPENCLAW_TOOL_NAMES = {tool["name"] for tool in openclaw_tools}
 
-tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, search_memory_tool, remember_tool, ingest_document_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool, play_music_tool, control_music_tool, update_music_preferences_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
+tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, search_memory_tool, remember_tool, ingest_document_tool, create_task_tool, add_subtask_tool, set_subtask_status_tool, list_tasks_tool, get_task_status_tool, recommend_task_order_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool, play_music_tool, control_music_tool, update_music_preferences_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
 config = types.LiveConnectConfig(
@@ -495,6 +586,7 @@ config = types.LiveConnectConfig(
         "If no webcam frame has been provided yet, say that you do not currently have a camera frame available. "
         "For camera or image questions, call inspect_camera first and base your answer only on that result. "
         "You have a long-term semantic memory. Call search_memory BEFORE answering whenever the user asks about something they told you earlier, refers to past facts, their notes or ingested documents, or says things like 'recuerdas', 'que dije sobre', 'segun mis apuntes/documentos'; base the answer only on the returned snippets. Each snippet includes its source (a document name, 'nota', or a 'chat:...' label); when you answer from memory, cite it naturally, e.g. 'segun tu documento <nombre>...', 'segun la nota que guardaste...' or 'segun lo que me contaste...'. If search_memory returns nothing relevant, say you have nothing stored about that. Call remember when the user says 'recuerda que', 'apunta que' or 'guarda esto'. Call ingest_document to index a file or PDF the user points you to. "
+        "You manage to-do tasks made of subtasks (checklists). Map Spanish requests: 'crea una tarea X' -> create_task; 'añade la subtarea Y a la tarea X' -> add_subtask; 'marca como completada Y' / 'ya he hecho Y' -> set_subtask_status(completed=true); 'desmarca Y' -> set_subtask_status(completed=false); 'que tareas tengo' -> list_tasks; 'que porcentaje llevo de X' / 'que me queda pendiente de X' / 'muestrame las pendientes de X' -> get_task_status; 'que me recomiendas hacer primero' / 'ordename las tareas de X' -> recommend_task_order. Resolve tasks and subtasks by the name the user says (approximate match is fine). When you recommend an order, explain it briefly using the reasons returned by the tool. "
         "This includes Spanish requests like 'que ves', 'que estas viendo', 'que es este objeto', or 'describe la imagen'. "
         "Do not invent visual details that are not in the camera analysis. "
         "For Spanish requests such as 'activa el modo simulacion', 'activa la simulacion', 'modo demo', or 'activa modo demo', call activate_simulation_mode. "
@@ -511,7 +603,7 @@ config = types.LiveConnectConfig(
         "Your external capabilities are limited to: WhatsApp messaging, Google Calendar events, and LinkedIn posts. All of these go through OpenClawBridge / OpenWA. "
         "Never send WhatsApp messages, LinkedIn posts, calendar invitations, cancellations, or automatic replies without explicit user confirmation, unless there is a previously authorized limited autopilot rule. "
         "Before sensitive actions, show the service or channel, recipient/group/platform, content, date/time if relevant, and exact action. After execution, answer in first person as Jarvis. Do not say that OpenClaw is speaking or quote OpenClaw as the final responder. "
-        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, long-term semantic memory that can remember facts and ingest documents, WhatsApp messaging, authorized automatic replies, Google Calendar, LinkedIn posts, controlled automations, and pending confirmations. Do not mention email, Telegram or other channels. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
+        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, long-term semantic memory that can remember facts and ingest documents, to-do task lists with subtasks and progress tracking, WhatsApp messaging, authorized automatic replies, Google Calendar, LinkedIn posts, controlled automations, and pending confirmations. Do not mention email, Telegram or other channels. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
         "Your creator is Adrián, and you address him as 'Sir'. "
         "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
         "You have a fun personality.",
@@ -2196,7 +2288,7 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "search_memory", "remember", "ingest_document", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status", "play_music", "control_music", "update_music_preferences"] or fc.name in OPENCLAW_TOOL_NAMES:
+                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "search_memory", "remember", "ingest_document", "create_task", "add_subtask", "set_subtask_status", "list_tasks", "get_task_status", "recommend_task_order", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status", "play_music", "control_music", "update_music_preferences"] or fc.name in OPENCLAW_TOOL_NAMES:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
 
                                 # Check Permissions (Default to True if not set). Music and
@@ -2205,6 +2297,8 @@ class AudioLoop:
                                 _safe_tool = fc.name in (
                                     "play_music", "control_music", "update_music_preferences",
                                     "search_memory", "remember", "ingest_document",
+                                    "create_task", "add_subtask", "set_subtask_status",
+                                    "list_tasks", "get_task_status", "recommend_task_order",
                                 )
                                 confirmation_required = self.permissions.get(fc.name, False if _safe_tool else True)
                                 
@@ -2452,6 +2546,122 @@ class AudioLoop:
                                             result_str = f"He indexado '{res.get('file', file_path)}' en mi memoria ({res.get('added', 0)} fragmentos)."
                                         else:
                                             result_str = res.get("error") or "No pude leer el documento."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "create_task":
+                                    args = fc.args or {}
+                                    title = str(args.get("title") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'create_task' title='{title}'")
+                                    task = task_manager.create_task(title, str(args.get("description") or ""))
+                                    if task:
+                                        result_str = f"Tarea '{task['title']}' creada. Puedes añadirle subtareas cuando quieras."
+                                    else:
+                                        result_str = "No pude crear la tarea: falta el nombre."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "add_subtask":
+                                    args = fc.args or {}
+                                    task_name = str(args.get("task") or "").strip()
+                                    sub_title = str(args.get("title") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'add_subtask' task='{task_name}' title='{sub_title}'")
+                                    task = task_manager.find_task_by_name(task_name)
+                                    if not task:
+                                        result_str = f"No encontre ninguna tarea que se llame '{task_name}'."
+                                    else:
+                                        updated = task_manager.add_subtask(
+                                            task["id"], sub_title,
+                                            estimated_duration=args.get("estimated_duration"),
+                                            priority=args.get("priority"),
+                                        )
+                                        if updated:
+                                            result_str = f"Añadida la subtarea '{sub_title}' a '{updated['title']}'. Llevas {updated['completed_count']}/{updated['subtask_count']} ({updated['progress']}%)."
+                                        else:
+                                            result_str = "No pude añadir la subtarea."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "set_subtask_status":
+                                    args = fc.args or {}
+                                    task_name = str(args.get("task") or "").strip()
+                                    sub_name = str(args.get("subtask") or "").strip()
+                                    completed = bool(args.get("completed"))
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'set_subtask_status' task='{task_name}' sub='{sub_name}' completed={completed}")
+                                    task = task_manager.find_task_by_name(task_name)
+                                    subtask = task_manager._find_subtask_by_name(task, sub_name) if task else None
+                                    if not task:
+                                        result_str = f"No encontre la tarea '{task_name}'."
+                                    elif not subtask:
+                                        result_str = f"No encontre la subtarea '{sub_name}' en '{task['title']}'."
+                                    else:
+                                        updated = task_manager.update_subtask(task["id"], subtask["id"], completed=completed)
+                                        estado = "completada" if completed else "pendiente"
+                                        result_str = f"Marcada '{subtask['title']}' como {estado}. Progreso de '{updated['title']}': {updated['progress']}% ({updated['completed_count']}/{updated['subtask_count']})."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "list_tasks":
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'list_tasks'")
+                                    tasks = task_manager.list_tasks()
+                                    if not tasks:
+                                        result_str = "No tienes ninguna tarea creada todavia."
+                                    else:
+                                        lines = [f"- {t['title']}: {t['progress']}% ({t['completed_count']}/{t['subtask_count']})" for t in tasks]
+                                        result_str = "Tus tareas:\n" + "\n".join(lines)
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "get_task_status":
+                                    args = fc.args or {}
+                                    task_name = str(args.get("task") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'get_task_status' task='{task_name}'")
+                                    task = task_manager.find_task_by_name(task_name)
+                                    if not task:
+                                        result_str = f"No encontre ninguna tarea que se llame '{task_name}'."
+                                    else:
+                                        pending = [s["title"] for s in task["subtasks"] if not s.get("completed")]
+                                        done = [s["title"] for s in task["subtasks"] if s.get("completed")]
+                                        result_str = f"'{task['title']}' va al {task['progress']}% ({task['completed_count']}/{task['subtask_count']})."
+                                        if pending:
+                                            result_str += " Pendientes: " + ", ".join(pending) + "."
+                                        if done:
+                                            result_str += " Completadas: " + ", ".join(done) + "."
+                                        if not task["subtasks"]:
+                                            result_str = f"'{task['title']}' no tiene subtareas todavia."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "recommend_task_order":
+                                    args = fc.args or {}
+                                    task_name = str(args.get("task") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'recommend_task_order' task='{task_name}'")
+                                    task = task_manager.find_task_by_name(task_name)
+                                    if not task:
+                                        result_str = f"No encontre ninguna tarea que se llame '{task_name}'."
+                                    else:
+                                        rec = await asyncio.to_thread(task_manager.recommend_order, task["id"])
+                                        order = rec.get("order") or []
+                                        if not order:
+                                            result_str = f"No hay subtareas pendientes en '{task['title']}'."
+                                        else:
+                                            steps = []
+                                            for i, item in enumerate(order, 1):
+                                                reason = f" — {item['reason']}" if item.get("reason") else ""
+                                                steps.append(f"{i}. {item['title']}{reason}")
+                                            result_str = f"Orden recomendado para '{task['title']}':\n" + "\n".join(steps)
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )

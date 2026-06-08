@@ -14,6 +14,7 @@ import {
     Globe,
     Lightbulb,
     BrainCircuit,
+    ListTodo,
 } from 'lucide-react';
 import ProfilePanel from './ProfilePanel';
 
@@ -22,6 +23,7 @@ const navigationItems = [
     { id: 'chat', label: 'Chat', icon: MessageCircle },
     { id: 'calendar', label: 'Agenda', icon: CalendarDays },
     { id: 'actions', label: 'Acciones', icon: CheckSquare },
+    { id: 'tasks', label: 'Tareas', icon: ListTodo },
     { id: 'automations', label: 'Automatizaciones', icon: GitBranch },
     { id: 'social', label: 'Social', icon: Share2 },
     { id: 'projects', label: 'Proyectos', icon: FolderKanban },

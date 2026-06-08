@@ -159,6 +159,44 @@ export const ingestMemoryFile = async (file) => {
     }
 };
 
+// --- Tasks / Subtasks (checklists con progreso) ---------------------------
+export const getTasks = () => requestJson('/api/tasks');
+
+export const getTask = (taskId) => requestJson(`/api/tasks/${encodeURIComponent(taskId)}`);
+
+export const createTask = (title, description = '') => requestJson('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify({ title, description }),
+});
+
+export const updateTask = (taskId, payload) => requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload || {}),
+});
+
+export const deleteTask = (taskId) => requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+});
+
+export const addSubtask = (taskId, payload) => requestJson(`/api/tasks/${encodeURIComponent(taskId)}/subtasks`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+});
+
+export const updateSubtask = (taskId, subtaskId, payload) =>
+    requestJson(`/api/tasks/${encodeURIComponent(taskId)}/subtasks/${encodeURIComponent(subtaskId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload || {}),
+    });
+
+export const deleteSubtask = (taskId, subtaskId) =>
+    requestJson(`/api/tasks/${encodeURIComponent(taskId)}/subtasks/${encodeURIComponent(subtaskId)}`, {
+        method: 'DELETE',
+    });
+
+export const recommendTaskOrder = (taskId) =>
+    requestJson(`/api/tasks/${encodeURIComponent(taskId)}/recommend`, { method: 'POST' });
+
 export const getAutomations = () => requestJson('/api/automations');
 
 export const getAutomationsHistory = (limit = 100) => requestJson(`/api/automations/history?limit=${encodeURIComponent(limit)}`);

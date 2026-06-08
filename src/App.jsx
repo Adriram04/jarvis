@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
-import io from 'socket.io-client';
+import { socket } from './services/socketClient';
 
 import CadWindow from './components/CadWindow';
 import BrowserWindow from './components/BrowserWindow';
@@ -59,7 +59,6 @@ import {
 
 
 
-const socket = io('http://localhost:8000');
 const { ipcRenderer } = window.require('electron');
 
 const DASHBOARD_POLL_INTERVALS = {

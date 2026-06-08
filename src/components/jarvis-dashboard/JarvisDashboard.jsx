@@ -18,6 +18,7 @@ import ProjectsModule from './modules/ProjectsModule';
 import SettingsModule from './modules/SettingsModule';
 import SocialModule from './modules/SocialModule';
 import SystemModule from './modules/SystemModule';
+import TasksModule from './modules/TasksModule';
 import WebAgentModule from './modules/WebAgentModule';
 import { getCalendarDateKey } from '../../services/jarvisDashboardApi';
 import { formatPrinterState } from '../../utils/printerStatus';
@@ -28,6 +29,7 @@ const moduleTitles = {
     chat: ['Chat', 'Conversación viva con Jarvis'],
     calendar: ['Agenda', 'Google Calendar real'],
     actions: ['Acciones', 'Confirmaciones pendientes'],
+    tasks: ['Tareas', 'Listas con subtareas y progreso'],
     automations: ['Automatizaciones', 'Procesos y workflows'],
     social: ['Social', 'LinkedIn y WhatsApp'],
     projects: ['Proyectos', 'Workspace y archivos creados'],
@@ -186,6 +188,7 @@ const JarvisDashboard = ({
         chat: <ChatModule {...moduleProps} />,
         calendar: <CalendarModule {...moduleProps} />,
         actions: <ActionsModule {...moduleProps} />,
+        tasks: <TasksModule {...moduleProps} />,
         automations: <AutomationsModule {...moduleProps} />,
         social: <SocialModule {...moduleProps} />,
         projects: <ProjectsModule {...moduleProps} />,
@@ -290,6 +293,20 @@ const JarvisDashboard = ({
                     <div className="jarvis-panel-header"><h2>CAD / 3D</h2></div>
                     <div className="jarvis-context-metric"><span>Impresoras</span><strong>{runtime.printerCount || 0}</strong></div>
                     <div className="jarvis-empty-state compact">{runtime.activePrintStatus?.state ? formatPrinterState(runtime.activePrintStatus.state) : runtime.slicingStatus?.message || 'Sin impresión activa.'}</div>
+                </section>
+            );
+        }
+
+        if (activeModule === 'tasks') {
+            return (
+                <section className="jarvis-panel jarvis-list-panel">
+                    <div className="jarvis-panel-header"><h2>Tareas</h2></div>
+                    <div className="jarvis-empty-state compact">
+                        Crea listas de tareas con subtareas; el progreso se calcula solo.
+                    </div>
+                    <div className="jarvis-empty-state compact">
+                        Por voz: «crea una tarea…», «marca como completada…», «¿qué me recomiendas hacer primero?».
+                    </div>
                 </section>
             );
         }

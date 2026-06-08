@@ -25,6 +25,7 @@
 | Smart Home | Control de dispositivos TP-Link Kasa | python-kasa |
 | Memoria de proyecto | Historial y artefactos persistentes por proyecto | JSONL y archivos locales |
 | Memoria semantica (RAG) | Recuerda notas e indexa documentos (txt/md/codigo/PDF) y los recupera por significado | Gemini embeddings + vector store local (numpy) |
+| Tareas | Listas de tareas con subtareas, progreso automatico y recomendacion de orden | TaskManager + JSON local, tools de voz, Socket.IO |
 
 ---
 
@@ -277,6 +278,39 @@ Para usar esta parte, instala OrcaSlicer o PrusaSlicer y asegurate de que la imp
 
 ---
 
+## Tareas
+
+J.A.R.V.I.S incluye un gestor de tareas tipo checklist. Una **tarea** es un proceso compuesto por varias **subtareas**; el porcentaje de progreso se calcula automaticamente segun las subtareas completadas (nunca se introduce a mano). Los datos se guardan en `backend/tasks_store.json` y cualquier cambio se propaga en tiempo real por Socket.IO (`tasks_update`), venga de la interfaz o de un comando de voz.
+
+Desde la pestana **Tareas** del panel puedes: crear tareas, anadir subtareas (con prioridad y duracion estimada opcionales), marcar/desmarcar completadas (se muestran tachadas), ver la barra de progreso, entrar al detalle, editar nombres y eliminar tareas o subtareas.
+
+Por voz o chat:
+
+- "Jarvis, crea una tarea llamada Tareas para la fiesta"
+- "Anade la subtarea Comprar comida a la tarea de la fiesta"
+- "Marca como completada Comprar comida" / "Desmarca Comprar comida"
+- "Que porcentaje llevo de la tarea de la fiesta?" -> "Llevas un 40% completado."
+- "Que me recomiendas hacer primero?" -> orden sugerido por urgencia, tiempo y dependencias
+- "Muestrame las pendientes de la fiesta"
+
+La recomendacion de orden usa Gemini (`JARVIS_TASKS_MODEL`, por defecto `gemini-2.5-flash`) para razonar urgencia/tiempo/dependencias, con un *fallback* heuristico determinista (prioridad + duracion) si no hay API o se agota la cuota.
+
+API REST:
+
+```http
+GET    /api/tasks
+GET    /api/tasks/{id}
+POST   /api/tasks                              {"title": "...", "description": "..."}
+PUT    /api/tasks/{id}                         {"title": "...", "description": "..."}
+DELETE /api/tasks/{id}
+POST   /api/tasks/{id}/subtasks                {"title": "...", "priority": "high", "estimated_duration": "2h"}
+PUT    /api/tasks/{id}/subtasks/{subtaskId}    {"completed": true, "title": "..."}
+DELETE /api/tasks/{id}/subtasks/{subtaskId}
+POST   /api/tasks/{id}/recommend
+```
+
+---
+
 ## Memoria semantica (RAG)
 
 J.A.R.V.I.S dispone de una memoria de largo plazo basada en recuperacion semantica. El texto, las notas y los documentos que se le indican se dividen en fragmentos, se vectorizan con el modelo de embeddings de Gemini (`gemini-embedding-001`) y se guardan en un vector store local en `projects/memory_store` (matriz numpy + JSON, sin base de datos externa). En una consulta, Jarvis recupera los fragmentos mas parecidos por significado y responde sobre ellos.
@@ -361,6 +395,7 @@ jarvis/
 |   |-- capture_face.py        # Captura de imagen facial de referencia
 |   |-- project_manager.py     # Gestion de proyectos y memoria
 |   |-- memory_agent.py        # Memoria semantica (RAG): embeddings + vector store local
+|   |-- task_manager.py        # Gestor de tareas/subtareas con progreso y recomendacion
 |   |-- tools.py               # Definiciones de herramientas para Gemini
 |   |-- settings.json          # Configuracion local
 |   |-- face_detection_yunet_*.onnx    # Modelo descargado localmente

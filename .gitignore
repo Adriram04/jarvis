@@ -14,6 +14,8 @@ backend/demo_state/
 backend/demo_state/pending_actions.json
 backend/demo_state/openclaw_autopilot_rules.json
 backend/last_cad_generation.json
+backend/tasks_store.json
+memory_store/
 backend/face_detection_yunet_*.onnx
 backend/face_recognition_sface_*.onnx
 backend/openclaw_sessions/

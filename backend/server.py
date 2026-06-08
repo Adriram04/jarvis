@@ -72,6 +72,7 @@ from simulators.kasa_simulator import kasa_simulator
 from simulators.printer_simulator import printer_simulator
 from workflow_manager import WorkflowManager
 from music_manager import music_manager
+from task_manager import task_manager
 
 # Create a Socket.IO server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
@@ -79,6 +80,9 @@ sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 # Music events are emitted through the shared MusicManager so both HTTP endpoints
 # and the live voice tools (jarvis.py) reach the frontend via the same path.
 music_manager.set_emitter(lambda event, data: asyncio.create_task(sio.emit(event, data)))
+# Tasks broadcast a 'tasks_update' on every mutation (REST or voice) so the UI
+# refreshes itself regardless of where the change originated.
+task_manager.set_emitter(lambda event, data: asyncio.create_task(sio.emit(event, data)))
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -804,6 +808,95 @@ async def api_memory_ingest(file: UploadFile = File(...)):
 @app.delete("/api/memory")
 async def api_memory_clear():
     return {"success": True, "result": await _get_memory().clear()}
+
+
+# ============================= Tasks / Subtasks =============================
+@app.get("/api/tasks")
+async def api_tasks_list():
+    return {"success": True, "tasks": task_manager.list_tasks()}
+
+
+@app.get("/api/tasks/{task_id}")
+async def api_task_get(task_id: str):
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return {"success": True, "task": task}
+
+
+@app.post("/api/tasks")
+async def api_task_create(data: dict = Body(default={})):
+    title = str(data.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Missing 'title'.")
+    task = task_manager.create_task(title, str(data.get("description") or ""))
+    return {"success": True, "task": task}
+
+
+@app.put("/api/tasks/{task_id}")
+async def api_task_update(task_id: str, data: dict = Body(default={})):
+    task = task_manager.update_task(
+        task_id,
+        title=data.get("title"),
+        description=data.get("description"),
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return {"success": True, "task": task}
+
+
+@app.delete("/api/tasks/{task_id}")
+async def api_task_delete(task_id: str):
+    if not task_manager.delete_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return {"success": True}
+
+
+@app.post("/api/tasks/{task_id}/subtasks")
+async def api_subtask_add(task_id: str, data: dict = Body(default={})):
+    title = str(data.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Missing 'title'.")
+    task = task_manager.add_subtask(
+        task_id,
+        title,
+        estimated_duration=data.get("estimated_duration"),
+        priority=data.get("priority"),
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return {"success": True, "task": task}
+
+
+@app.put("/api/tasks/{task_id}/subtasks/{subtask_id}")
+async def api_subtask_update(task_id: str, subtask_id: str, data: dict = Body(default={})):
+    task = task_manager.update_subtask(
+        task_id,
+        subtask_id,
+        title=data.get("title"),
+        completed=data.get("completed"),
+        estimated_duration=data.get("estimated_duration"),
+        priority=data.get("priority"),
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task or subtask not found.")
+    return {"success": True, "task": task}
+
+
+@app.delete("/api/tasks/{task_id}/subtasks/{subtask_id}")
+async def api_subtask_delete(task_id: str, subtask_id: str):
+    task = task_manager.delete_subtask(task_id, subtask_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task or subtask not found.")
+    return {"success": True, "task": task}
+
+
+@app.post("/api/tasks/{task_id}/recommend")
+async def api_task_recommend(task_id: str):
+    if not task_manager.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found.")
+    recommendation = await asyncio.to_thread(task_manager.recommend_order, task_id)
+    return {"success": recommendation.get("success", False), "recommendation": recommendation}
 
 
 @app.post("/api/simulation/activate")
