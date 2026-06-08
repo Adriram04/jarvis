@@ -111,6 +111,58 @@ inspect_camera_tool = {
     }
 }
 
+search_memory_tool = {
+    "name": "search_memory",
+    "description": (
+        "Searches Jarvis' long-term semantic memory for information the user has "
+        "previously told you or documents they have ingested (notes, PDFs, files). "
+        "Use this whenever the user asks about something from the past, refers to "
+        "earlier facts, asks 'what did I say about...', 'do you remember...', "
+        "'segun mis apuntes/documentos', or any question that personal stored "
+        "knowledge could answer. Base your reply only on the returned snippets."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "query": {"type": "STRING", "description": "What to look up, phrased as the user's question or topic."}
+        },
+        "required": ["query"]
+    }
+}
+
+remember_tool = {
+    "name": "remember",
+    "description": (
+        "Stores a piece of information in Jarvis' long-term semantic memory so it "
+        "can be recalled later. Use when the user says 'recuerda que...', "
+        "'apunta que...', 'guarda esto', or shares a fact worth keeping."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "text": {"type": "STRING", "description": "The exact information to remember, as a self-contained statement."}
+        },
+        "required": ["text"]
+    }
+}
+
+ingest_document_tool = {
+    "name": "ingest_document",
+    "description": (
+        "Reads a local document (txt, markdown, code, json or PDF) by path and "
+        "adds its contents to Jarvis' long-term semantic memory so its text can be "
+        "searched later. Use when the user asks to 'lee/indexa/aprende este "
+        "documento/archivo/PDF'."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "file_path": {"type": "STRING", "description": "Absolute or relative path to the document to ingest."}
+        },
+        "required": ["file_path"]
+    }
+}
+
 create_project_tool = {
     "name": "create_project",
     "description": "Creates a new project folder to organize files.",
@@ -428,7 +480,7 @@ openclaw_tools = [
 
 OPENCLAW_TOOL_NAMES = {tool["name"] for tool in openclaw_tools}
 
-tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool, play_music_tool, control_music_tool, update_music_preferences_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
+tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, inspect_camera_tool, search_memory_tool, remember_tool, ingest_document_tool, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, pause_print_tool, resume_print_tool, cancel_print_tool, iterate_cad_tool, activate_simulation_mode_tool, deactivate_simulation_mode_tool, get_simulation_status_tool, play_music_tool, control_music_tool, update_music_preferences_tool] + openclaw_tools + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
 config = types.LiveConnectConfig(
@@ -442,6 +494,7 @@ config = types.LiveConnectConfig(
         "If the user asks what you see, describe the latest provided webcam frame instead of claiming you have no camera. "
         "If no webcam frame has been provided yet, say that you do not currently have a camera frame available. "
         "For camera or image questions, call inspect_camera first and base your answer only on that result. "
+        "You have a long-term semantic memory. Call search_memory BEFORE answering whenever the user asks about something they told you earlier, refers to past facts, their notes or ingested documents, or says things like 'recuerdas', 'que dije sobre', 'segun mis apuntes/documentos'; base the answer only on the returned snippets. Each snippet includes its source (a document name, 'nota', or a 'chat:...' label); when you answer from memory, cite it naturally, e.g. 'segun tu documento <nombre>...', 'segun la nota que guardaste...' or 'segun lo que me contaste...'. If search_memory returns nothing relevant, say you have nothing stored about that. Call remember when the user says 'recuerda que', 'apunta que' or 'guarda esto'. Call ingest_document to index a file or PDF the user points you to. "
         "This includes Spanish requests like 'que ves', 'que estas viendo', 'que es este objeto', or 'describe la imagen'. "
         "Do not invent visual details that are not in the camera analysis. "
         "For Spanish requests such as 'activa el modo simulacion', 'activa la simulacion', 'modo demo', or 'activa modo demo', call activate_simulation_mode. "
@@ -458,7 +511,7 @@ config = types.LiveConnectConfig(
         "Your external capabilities are limited to: WhatsApp messaging, Google Calendar events, and LinkedIn posts. All of these go through OpenClawBridge / OpenWA. "
         "Never send WhatsApp messages, LinkedIn posts, calendar invitations, cancellations, or automatic replies without explicit user confirmation, unless there is a previously authorized limited autopilot rule. "
         "Before sensitive actions, show the service or channel, recipient/group/platform, content, date/time if relevant, and exact action. After execution, answer in first person as Jarvis. Do not say that OpenClaw is speaking or quote OpenClaw as the final responder. "
-        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, WhatsApp messaging, authorized automatic replies, Google Calendar, LinkedIn posts, controlled automations, and pending confirmations. Do not mention email, Telegram or other channels. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
+        "When the user asks about your functionalities or capabilities, answer as Jarvis in first person and include voice, camera vision, CAD generation and iteration, 3D printing and simulation, Kasa control and simulation, web automation, project memory, long-term semantic memory that can remember facts and ingest documents, WhatsApp messaging, authorized automatic replies, Google Calendar, LinkedIn posts, controlled automations, and pending confirmations. Do not mention email, Telegram or other channels. Do not mention OpenClaw, Clawbot, or internal gateways in capability answers. Say sensitive actions require confirmation. "
         "Your creator is Adrián, and you address him as 'Sir'. "
         "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
         "You have a fun personality.",
@@ -580,7 +633,24 @@ class AudioLoop:
         # If jarvis.py is in backend/, project root is one up
         project_root = os.path.dirname(current_dir)
         self.project_manager = ProjectManager(project_root)
-        
+
+        # Semantic (RAG) long-term memory: lets Jarvis remember notes and
+        # ingest documents, then recall them by meaning across sessions.
+        try:
+            from memory_agent import SemanticMemory
+            self.memory = SemanticMemory(storage_dir=os.path.join(project_root, "memory_store"))
+            print(f"[JARVIS] Semantic memory ready (available={self.memory.available}, chunks={len(self.memory.records)})")
+        except Exception as e:
+            print(f"[JARVIS] [WARN] Semantic memory unavailable: {e}")
+            self.memory = None
+        # Auto-ingest completed chat turns into semantic memory so Jarvis can
+        # recall past conversations. Tunable/disable-able via env.
+        self._memory_auto_ingest_chat = os.getenv("JARVIS_MEMORY_AUTO_INGEST_CHAT", "true").lower() not in ("0", "false", "no")
+        try:
+            self._memory_chat_min_chars = int(os.getenv("JARVIS_MEMORY_CHAT_MIN_CHARS", "40"))
+        except ValueError:
+            self._memory_chat_min_chars = 40
+
         # Sync Initial Project State
         if self.on_project_update:
             # We need to defer this slightly or just call it. 
@@ -592,10 +662,32 @@ class AudioLoop:
         """Forces the current chat buffer to be written to log."""
         if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
             self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
+            self._auto_ingest_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
             self.chat_buffer = {"sender": None, "text": ""}
         # Reset transcription tracking for new turn
         self._last_input_transcription = ""
         self._last_output_transcription = ""
+
+    def _auto_ingest_chat(self, sender, text):
+        """Fire-and-forget: store a completed chat message in semantic memory so
+        Jarvis can later recall the conversation. Short/trivial utterances are
+        skipped to avoid noise and unnecessary embedding calls."""
+        memory = getattr(self, "memory", None)
+        if not memory or not memory.available or not getattr(self, "_memory_auto_ingest_chat", False):
+            return
+        text = (text or "").strip()
+        if len(text) < getattr(self, "_memory_chat_min_chars", 40):
+            return
+        project = self.project_manager.current_project
+        label = "Usuario" if str(sender).lower() in ("user", "you", "tu", "tú") else "Jarvis"
+        snippet = f"[Conversacion - {label}] {text}"
+        try:
+            asyncio.get_running_loop().create_task(
+                memory.add_text(snippet, source=f"chat:{project}", project=project)
+            )
+        except RuntimeError:
+            # No running event loop (sync/shutdown context); skip silently.
+            pass
 
     def update_permissions(self, new_perms):
         print(f"[JARVIS DEBUG] [CONFIG] Updating tool permissions: {new_perms}")
@@ -2056,6 +2148,7 @@ class AudioLoop:
                                             # Flush previous if exists
                                             if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
                                                 self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
+                                                self._auto_ingest_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
                                             # Start new
                                             self.chat_buffer = {"sender": "User", "text": delta}
                                         else:
@@ -2087,6 +2180,7 @@ class AudioLoop:
                                             # Flush previous
                                             if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
                                                 self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
+                                                self._auto_ingest_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
                                             # Start new
                                             self.chat_buffer = {"sender": "JARVIS", "text": delta}
                                         else:
@@ -2102,13 +2196,17 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status", "play_music", "control_music", "update_music_preferences"] or fc.name in OPENCLAW_TOOL_NAMES:
+                            if fc.name in ["generate_cad", "run_web_agent", "inspect_camera", "search_memory", "remember", "ingest_document", "create_directory", "write_file", "read_directory", "read_file", "delete_path", "delete_project", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "pause_print", "resume_print", "cancel_print", "iterate_cad", "activate_simulation_mode", "deactivate_simulation_mode", "get_simulation_status", "play_music", "control_music", "update_music_preferences"] or fc.name in OPENCLAW_TOOL_NAMES:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
 
-                                # Check Permissions (Default to True if not set). Music tools are
-                                # safe and auto-allowed so playback never blocks on a confirmation.
-                                _music_tool = fc.name in ("play_music", "control_music", "update_music_preferences")
-                                confirmation_required = self.permissions.get(fc.name, False if _music_tool else True)
+                                # Check Permissions (Default to True if not set). Music and
+                                # memory tools are safe (local, read/append only) and
+                                # auto-allowed so they never block on a confirmation.
+                                _safe_tool = fc.name in (
+                                    "play_music", "control_music", "update_music_preferences",
+                                    "search_memory", "remember", "ingest_document",
+                                )
+                                confirmation_required = self.permissions.get(fc.name, False if _safe_tool else True)
                                 
                                 if not confirmation_required:
                                     print(f"[JARVIS DEBUG] [TOOL] Permission check: '{fc.name}' -> AUTO-ALLOW")
@@ -2298,6 +2396,64 @@ class AudioLoop:
                                     projects = self.project_manager.list_projects()
                                     function_response = types.FunctionResponse(
                                         id=fc.id, name=fc.name, response={"result": f"Available projects: {', '.join(projects)}"}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "search_memory":
+                                    query = str((fc.args or {}).get("query") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'search_memory' query='{query}'")
+                                    if not self.memory or not self.memory.available:
+                                        result_str = "Semantic memory is not configured."
+                                    else:
+                                        hits = await self.memory.search(query, k=5)
+                                        if hits:
+                                            parts = []
+                                            for i, h in enumerate(hits, 1):
+                                                src = h.get("source") or "memory"
+                                                parts.append(f"[{i}] (fuente: {src}, relevancia {h['score']:.2f}) {h['text']}")
+                                            result_str = "Resultados de la memoria:\n" + "\n".join(parts)
+                                        else:
+                                            result_str = "No encontre nada relevante en la memoria sobre eso."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "remember":
+                                    text = str((fc.args or {}).get("text") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'remember' ({len(text)} chars)")
+                                    if not self.memory or not self.memory.available:
+                                        result_str = "Semantic memory is not configured."
+                                    else:
+                                        res = await self.memory.add_text(
+                                            text, source="nota", project=self.project_manager.current_project
+                                        )
+                                        if res.get("success") and res.get("added"):
+                                            result_str = "Hecho, lo he guardado en mi memoria."
+                                        elif res.get("success"):
+                                            result_str = "Ya tenia eso en mi memoria."
+                                        else:
+                                            result_str = res.get("error") or "No pude guardarlo."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                elif fc.name == "ingest_document":
+                                    file_path = str((fc.args or {}).get("file_path") or "").strip()
+                                    print(f"[JARVIS DEBUG] [TOOL] Tool Call: 'ingest_document' path='{file_path}'")
+                                    if not self.memory or not self.memory.available:
+                                        result_str = "Semantic memory is not configured."
+                                    else:
+                                        res = await self.memory.add_file(
+                                            file_path, project=self.project_manager.current_project
+                                        )
+                                        if res.get("success"):
+                                            result_str = f"He indexado '{res.get('file', file_path)}' en mi memoria ({res.get('added', 0)} fragmentos)."
+                                        else:
+                                            result_str = res.get("error") or "No pude leer el documento."
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
                                     )
                                     function_responses.append(function_response)
 

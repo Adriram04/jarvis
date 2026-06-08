@@ -13,6 +13,7 @@ import CalendarModule from './modules/CalendarModule';
 import ChatModule from './modules/ChatModule';
 import DevicesModule from './modules/DevicesModule';
 import HomeModule from './modules/HomeModule';
+import MemoryModule from './modules/MemoryModule';
 import ProjectsModule from './modules/ProjectsModule';
 import SettingsModule from './modules/SettingsModule';
 import SocialModule from './modules/SocialModule';
@@ -31,6 +32,7 @@ const moduleTitles = {
     social: ['Social', 'LinkedIn y WhatsApp'],
     projects: ['Proyectos', 'Workspace y archivos creados'],
     cad3d: ['CAD / 3D', 'Diseño, slicing e impresión'],
+    memory: ['Memoria', 'Memoria semántica y documentos'],
     devices: ['Dispositivos', 'Kasa y smart devices'],
     web: ['Web Agent', 'Automatización web visual'],
     system: ['Sistema', 'Estado técnico real'],
@@ -188,6 +190,7 @@ const JarvisDashboard = ({
         social: <SocialModule {...moduleProps} />,
         projects: <ProjectsModule {...moduleProps} />,
         cad3d: <Cad3DModule {...moduleProps} />,
+        memory: <MemoryModule {...moduleProps} />,
         devices: <DevicesModule {...moduleProps} />,
         web: <WebAgentModule {...moduleProps} />,
         system: <SystemModule {...moduleProps} />,
@@ -287,6 +290,20 @@ const JarvisDashboard = ({
                     <div className="jarvis-panel-header"><h2>CAD / 3D</h2></div>
                     <div className="jarvis-context-metric"><span>Impresoras</span><strong>{runtime.printerCount || 0}</strong></div>
                     <div className="jarvis-empty-state compact">{runtime.activePrintStatus?.state ? formatPrinterState(runtime.activePrintStatus.state) : runtime.slicingStatus?.message || 'Sin impresión activa.'}</div>
+                </section>
+            );
+        }
+
+        if (activeModule === 'memory') {
+            return (
+                <section className="jarvis-panel jarvis-list-panel">
+                    <div className="jarvis-panel-header"><h2>Memoria semántica</h2></div>
+                    <div className="jarvis-empty-state compact">
+                        Jarvis recuerda notas, documentos (txt/md/código/PDF) y vuestras conversaciones, y los recupera por significado.
+                    </div>
+                    <div className="jarvis-empty-state compact">
+                        Prueba: «Jarvis, ¿qué dije sobre…?» o sube un PDF para que lo aprenda.
+                    </div>
                 </section>
             );
         }

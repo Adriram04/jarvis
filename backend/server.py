@@ -739,6 +739,73 @@ async def api_project_activate(project_name: str):
         "project": _project_summary(project_path),
     }
 
+def _get_memory():
+    """Return the live SemanticMemory instance, or raise 503 if unavailable."""
+    memory = getattr(audio_loop, "memory", None) if audio_loop else None
+    if not memory:
+        raise HTTPException(status_code=503, detail="Semantic memory unavailable.")
+    return memory
+
+
+@app.get("/api/memory/stats")
+async def api_memory_stats():
+    return {"success": True, "stats": _get_memory().stats()}
+
+
+@app.post("/api/memory/search")
+async def api_memory_search(data: dict = Body(default={})):
+    query = str(data.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query'.")
+    k = int(data.get("k") or 5)
+    hits = await _get_memory().search(query, k=k)
+    return {"success": True, "query": query, "results": hits}
+
+
+@app.post("/api/memory/remember")
+async def api_memory_remember(data: dict = Body(default={})):
+    text = str(data.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Missing 'text'.")
+    memory = _get_memory()
+    current = audio_loop.project_manager.current_project if audio_loop and audio_loop.project_manager else None
+    result = await memory.add_text(text, source=str(data.get("source") or "nota"), project=current)
+    return {"success": result.get("success", False), "result": result, "stats": memory.stats()}
+
+
+@app.post("/api/memory/ingest")
+async def api_memory_ingest(file: UploadFile = File(...)):
+    import tempfile
+    memory = _get_memory()
+    content = await file.read()
+    suffix = os.path.splitext(file.filename or "")[1] or ".txt"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        current = audio_loop.project_manager.current_project if audio_loop and audio_loop.project_manager else None
+        result = await memory.add_file(tmp_path, project=current)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+    # Report the original filename rather than the temp path.
+    result["file"] = file.filename
+    if memory.records and result.get("success"):
+        # Re-tag the freshly added chunks with the real filename for nicer recall.
+        for rec in memory.records:
+            if rec.get("metadata", {}).get("path") == tmp_path:
+                rec["source"] = file.filename
+        memory._save()
+    return {"success": result.get("success", False), "result": result, "stats": memory.stats()}
+
+
+@app.delete("/api/memory")
+async def api_memory_clear():
+    return {"success": True, "result": await _get_memory().clear()}
+
+
 @app.post("/api/simulation/activate")
 async def api_simulation_activate():
     message = await set_simulation_mode(True)

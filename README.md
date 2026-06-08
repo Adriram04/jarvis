@@ -24,6 +24,7 @@
 | Agente web | Navegacion automatizada en navegador | Playwright |
 | Smart Home | Control de dispositivos TP-Link Kasa | python-kasa |
 | Memoria de proyecto | Historial y artefactos persistentes por proyecto | JSONL y archivos locales |
+| Memoria semantica (RAG) | Recuerda notas e indexa documentos (txt/md/codigo/PDF) y los recupera por significado | Gemini embeddings + vector store local (numpy) |
 
 ---
 
@@ -276,6 +277,36 @@ Para usar esta parte, instala OrcaSlicer o PrusaSlicer y asegurate de que la imp
 
 ---
 
+## Memoria semantica (RAG)
+
+J.A.R.V.I.S dispone de una memoria de largo plazo basada en recuperacion semantica. El texto, las notas y los documentos que se le indican se dividen en fragmentos, se vectorizan con el modelo de embeddings de Gemini (`gemini-embedding-001`) y se guardan en un vector store local en `projects/memory_store` (matriz numpy + JSON, sin base de datos externa). En una consulta, Jarvis recupera los fragmentos mas parecidos por significado y responde sobre ellos.
+
+Por voz o chat:
+
+- "Jarvis, recuerda que el filamento PLA esta en el cajon de abajo" -> guarda el dato.
+- "Jarvis, indexa este PDF: C:\\ruta\\apuntes.pdf" -> ingiere el documento.
+- "Jarvis, que dije sobre el filamento?" -> busca y responde con lo recordado.
+
+Tambien por API REST:
+
+```http
+POST   /api/memory/remember     {"text": "..."}
+POST   /api/memory/search       {"query": "...", "k": 5}
+POST   /api/memory/ingest       (multipart: file)
+GET    /api/memory/stats
+DELETE /api/memory
+```
+
+Formatos admitidos para ingesta: texto, markdown, codigo, json y PDF. Requiere `GEMINI_API_KEY`; si no esta configurada, la memoria se desactiva de forma transparente.
+
+Ademas:
+
+- **Pestana "Memoria"** en el panel: subir documentos por drag and drop, guardar notas, buscar por significado y ver/vaciar los fragmentos indexados.
+- **Auto-ingesta del chat**: las conversaciones completas se guardan automaticamente en memoria (configurable con `JARVIS_MEMORY_AUTO_INGEST_CHAT` y `JARVIS_MEMORY_CHAT_MIN_CHARS`).
+- **Citaciones**: al responder desde memoria, Jarvis menciona la fuente ("segun tu documento X...", "segun la nota que guardaste...").
+
+---
+
 ## Tests
 
 Ejecutar toda la suite configurada:
@@ -329,6 +360,7 @@ jarvis/
 |   |-- authenticator.py       # Autenticacion facial con OpenCV YuNet + SFace
 |   |-- capture_face.py        # Captura de imagen facial de referencia
 |   |-- project_manager.py     # Gestion de proyectos y memoria
+|   |-- memory_agent.py        # Memoria semantica (RAG): embeddings + vector store local
 |   |-- tools.py               # Definiciones de herramientas para Gemini
 |   |-- settings.json          # Configuracion local
 |   |-- face_detection_yunet_*.onnx    # Modelo descargado localmente

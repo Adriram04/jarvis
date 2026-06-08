@@ -126,6 +126,39 @@ export const updateMusicPreferences = (payload) => requestJson('/api/music/prefe
     body: JSON.stringify(payload || {}),
 });
 
+// --- Semantic memory (RAG) ------------------------------------------------
+export const getMemoryStats = () => requestJson('/api/memory/stats');
+
+export const searchMemory = (query, k = 5) => requestJson('/api/memory/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, k }),
+});
+
+export const rememberMemory = (text, source = 'nota') => requestJson('/api/memory/remember', {
+    method: 'POST',
+    body: JSON.stringify({ text, source }),
+});
+
+export const clearMemory = () => requestJson('/api/memory', { method: 'DELETE' });
+
+export const ingestMemoryFile = async (file) => {
+    // Multipart upload: must NOT set Content-Type so the browser adds the
+    // multipart boundary itself. Hence a bespoke fetch instead of requestJson.
+    try {
+        const form = new FormData();
+        form.append('file', file);
+        const response = await fetch(`${API_BASE}/api/memory/ingest`, { method: 'POST', body: form });
+        const text = await response.text();
+        const body = text ? JSON.parse(text) : {};
+        if (!response.ok) {
+            return fail(body?.error || body?.detail || response.statusText, { status: response.status, data: body });
+        }
+        return ok(body, { status: response.status });
+    } catch (error) {
+        return fail(error);
+    }
+};
+
 export const getAutomations = () => requestJson('/api/automations');
 
 export const getAutomationsHistory = (limit = 100) => requestJson(`/api/automations/history?limit=${encodeURIComponent(limit)}`);

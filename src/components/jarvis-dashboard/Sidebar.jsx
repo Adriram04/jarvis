@@ -13,6 +13,7 @@ import {
     Box,
     Globe,
     Lightbulb,
+    BrainCircuit,
 } from 'lucide-react';
 import ProfilePanel from './ProfilePanel';
 
@@ -25,6 +26,7 @@ const navigationItems = [
     { id: 'social', label: 'Social', icon: Share2 },
     { id: 'projects', label: 'Proyectos', icon: FolderKanban },
     { id: 'cad3d', label: 'CAD / 3D', icon: Box },
+    { id: 'memory', label: 'Memoria', icon: BrainCircuit },
     { id: 'devices', label: 'Dispositivos', icon: Lightbulb },
     { id: 'web', label: 'Web Agent', icon: Globe },
     { id: 'system', label: 'Sistema', icon: Cpu },

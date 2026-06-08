@@ -22,6 +22,8 @@ python-dotenv
 mediapipe
 # CAD Generation
 build123d
+# Semantic memory (RAG): PDF text extraction for document ingestion
+pypdf
 # Testing
 pytest
 pytest-asyncio
