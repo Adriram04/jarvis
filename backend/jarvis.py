@@ -46,6 +46,12 @@ CHANNELS = 1
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
+# Output buffer for Jarvis' voice. Larger => more headroom against underruns
+# (smoother speech), at the cost of a little extra latency. ~100ms at 24kHz.
+try:
+    OUTPUT_FRAMES_PER_BUFFER = int(os.getenv("JARVIS_OUTPUT_FRAMES_PER_BUFFER", "2400"))
+except (TypeError, ValueError):
+    OUTPUT_FRAMES_PER_BUFFER = 2400
 
 MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 VISION_MODEL = os.getenv("JARVIS_VISION_MODEL", "gemini-2.5-flash")
@@ -2611,17 +2617,44 @@ class AudioLoop:
                 rate=RECEIVE_SAMPLE_RATE,
                 output=True,
                 output_device_index=self.output_device_index,
+                # Give PortAudio a generous buffer (~100ms at 24kHz) so the
+                # device keeps playing while Python fetches the next chunk.
+                # Without this the default buffer drains between writes and the
+                # voice sounds choppy / cut off.
+                frames_per_buffer=OUTPUT_FRAMES_PER_BUFFER,
             )
             self.output_audio_stream = stream
             while not self.stop_event.is_set():
                 bytestream = await self.audio_in_queue.get()
                 if bytestream is None:
                     break
+
+                # Coalesce every chunk already waiting in the queue into a
+                # single larger write. Gemini streams many tiny PCM packets;
+                # writing them one-by-one leaves micro-gaps between writes that
+                # make speech stutter. Draining what's ready keeps the output
+                # buffer continuously fed for smooth, uninterrupted playback.
+                chunks = [bytestream]
+                stop = False
+                while True:
+                    try:
+                        extra = self.audio_in_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if extra is None:
+                        stop = True
+                        break
+                    chunks.append(extra)
+
+                bytestream = b"".join(chunks)
                 self._mark_model_audio_active()
                 if self.on_audio_data:
                     self.on_audio_data(bytestream)
                 await asyncio.to_thread(stream.write, bytestream)
                 self._mark_model_audio_active()
+
+                if stop:
+                    break
         finally:
             if stream is not None and self.output_audio_stream is stream:
                 self._close_stream("output_audio_stream")
