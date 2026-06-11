@@ -15,10 +15,10 @@ const ConfirmationPopup = ({ request, onConfirm, onDeny }) => {
                     </div>
                     <div>
                         <h2 className="text-xl font-bold text-cyan-400 tracking-wider font-mono drop-shadow-sm">
-                            AUTHORIZATION REQUIRED
+                            AUTORIZACIÓN REQUERIDA
                         </h2>
                         <p className="text-xs text-cyan-600 font-mono tracking-widest uppercase">
-                            AI Logic Core Request
+                            Solicitud del núcleo de IA
                         </p>
                     </div>
                 </div>
@@ -26,13 +26,13 @@ const ConfirmationPopup = ({ request, onConfirm, onDeny }) => {
                 {/* Content */}
                 <div className="mb-8 space-y-4 relative z-10">
                     <p className="text-gray-300 leading-relaxed text-sm">
-                        The system is requesting permission to execute an autonomous function. Please review the parameters below.
+                        El sistema solicita permiso para ejecutar una acción. Revisa los parámetros antes de continuar.
                     </p>
 
                     <div className="space-y-2">
                         <div className="bg-cyan-950/30 border border-cyan-800/50 rounded-xl overflow-hidden">
                             <div className="bg-cyan-900/40 px-4 py-2 border-b border-cyan-800/50 flex justify-between items-center">
-                                <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider">Function</span>
+                                <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider">Función</span>
                                 <span className="text-xs text-white/50 font-mono">system.call</span>
                             </div>
                             <div className="p-4">
@@ -42,7 +42,7 @@ const ConfirmationPopup = ({ request, onConfirm, onDeny }) => {
 
                         <div className="bg-cyan-950/30 border border-cyan-800/50 rounded-xl overflow-hidden">
                             <div className="bg-cyan-900/40 px-4 py-2 border-b border-cyan-800/50 flex justify-between items-center">
-                                <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider">Parameters</span>
+                                <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider">Parámetros</span>
                                 <span className="text-xs text-white/50 font-mono">json.payload</span>
                             </div>
                             <div className="p-4 bg-black/20">
@@ -60,13 +60,13 @@ const ConfirmationPopup = ({ request, onConfirm, onDeny }) => {
                         onClick={onDeny}
                         className="flex-1 px-4 py-3.5 rounded-xl border border-red-500/30 bg-red-950/40 text-red-400 hover:bg-red-900/60 hover:border-red-500 hover:text-red-300 transition-all duration-200 font-bold tracking-wider uppercase text-xs"
                     >
-                        Deny Request
+                        Denegar
                     </button>
                     <button
                         onClick={onConfirm}
                         className="flex-1 px-4 py-3.5 rounded-xl border border-cyan-500/30 bg-cyan-950/40 text-cyan-400 hover:bg-cyan-900/60 hover:border-cyan-400 hover:text-cyan-300 transition-all duration-200 font-bold tracking-wider uppercase text-xs shadow-[0_0_20px_rgba(34,211,238,0.1)] hover:shadow-[0_0_30px_rgba(34,211,238,0.25)] relative overflow-hidden group"
                     >
-                        <span className="relative z-10">Authorize Execution</span>
+                        <span className="relative z-10">Autorizar</span>
                         <div className="absolute inset-0 bg-cyan-400/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
                     </button>
                 </div>
