@@ -12,7 +12,6 @@ JARVIS separa el proveedor de mensajería WhatsApp del gateway de productividad 
 │                                     │
 │  Calendar  ──┐                      │
 │  LinkedIn  ──┼── OpenClawBridge ──▶ OpenClaw CLI/Gateway
-│  Email     ──┘                      │
 │  Workflows ──┘                      │
 └─────────────────────────────────────┘
 ```
@@ -46,7 +45,7 @@ JARVIS_OPENWA_SEND_STYLE=send-text
 
 ## OpenClaw (gateway legacy)
 
-- **Para qué**: Calendar, LinkedIn, email, workflows, y WhatsApp en modo legacy
+- **Para qué**: Calendar, LinkedIn, workflows, y WhatsApp en modo legacy (email/Telegram quedan fuera del alcance)
 - **Cómo funciona**: CLI subprocess o gateway WebSocket
 - **Archivo del bridge**: `backend/integrations/openclaw_bridge.py`
 - **No se elimina**: OpenClaw sigue siendo el gateway para productividad
@@ -57,7 +56,7 @@ JARVIS_OPENWA_SEND_STYLE=send-text
 JARVIS_OPENCLAW_ENABLED=true
 JARVIS_OPENCLAW_MODE=cli
 JARVIS_OPENCLAW_EXECUTABLE=openclaw
-JARVIS_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+JARVIS_OPENCLAW_GATEWAY_URL=          # vacio para gateway local; ws://... solo para gateway remoto
 ```
 
 ## Reglas de routing
@@ -67,7 +66,6 @@ JARVIS_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 | WhatsApp send       | OpenWA          | OpenClaw          |
 | Google Calendar     | OpenClaw        | OpenClaw          |
 | LinkedIn post       | OpenClaw        | OpenClaw          |
-| Email               | OpenClaw        | OpenClaw          |
 | Workflows           | OpenClaw        | OpenClaw          |
 
 ## Seguridad preservada

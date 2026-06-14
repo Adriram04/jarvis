@@ -17,7 +17,7 @@ JARVIS (backend)
                                      └─ WhatsApp
 ```
 
-OpenClaw queda como gateway legacy para Calendar, LinkedIn, email y workflows.
+OpenClaw queda como gateway legacy para Calendar, LinkedIn y workflows.
 WhatsApp sólo pasa por OpenClaw si `JARVIS_WHATSAPP_PROVIDER=openclaw`.
 
 ---

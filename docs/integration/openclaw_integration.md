@@ -166,7 +166,7 @@ La allowlist de OpenClaw se respeta siempre.
 
 No se exponen tokens, secretos ni credenciales. El bridge redacta campos sensibles en resultados crudos. Enviar mensajes y activar reglas sensibles pasa por pending actions.
 
-Gmail, Calendar y redes quedan como fallback generico solo cuando exista comando o skill real de OpenClaw; Jarvis no inventa comandos.
+Calendar y LinkedIn quedan como acciones de productividad solo cuando exista comando o skill real de OpenClaw; Jarvis no inventa comandos. El correo electronico queda fuera del alcance del proyecto.
 
 ## Calendario y LinkedIn
 

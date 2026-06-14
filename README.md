@@ -26,6 +26,9 @@
 | Memoria de proyecto | Historial y artefactos persistentes por proyecto | JSONL y archivos locales |
 | Memoria semantica (RAG) | Recuerda notas e indexa documentos (txt/md/codigo/PDF) y los recupera por significado | Gemini embeddings + vector store local (numpy) |
 | Tareas | Listas de tareas con subtareas, progreso automatico y recomendacion de orden | TaskManager + JSON local, tools de voz, Socket.IO |
+| Automatizaciones | Reglas evento-condicion-accion con plantillas y supervision | AutomationManager + ConditionEvaluator |
+| Productividad | WhatsApp, Google Calendar y LinkedIn bajo confirmacion | OpenWA + OpenClaw (gateway) |
+| Musica | Busqueda y reproduccion de musica de YouTube desde la interfaz | YouTube Data API + reproductor en el frontend |
 
 ---
 
@@ -170,12 +173,13 @@ No subas `.env` al repositorio.
 
 J.A.R.V.I.S puede delegar acciones externas en una capa interna de automatizacion. Jarvis sigue siendo siempre quien interpreta, redacta y responde al usuario; la capa externa solo ejecuta acciones tecnicas cuando esta configurada.
 
+El alcance de la integracion externa se limita a tres servicios: WhatsApp, Google Calendar y LinkedIn. Correo electronico, Telegram y otros canales quedan explicitamente fuera del alcance.
+
 Capacidades previstas:
 
-- Mensajeria: preparar, enviar y responder mensajes si el canal esta configurado.
-- Correo: buscar, resumir, crear borradores y enviar con confirmacion.
-- Calendario: consultar agenda y crear, modificar o cancelar eventos con confirmacion cuando proceda.
-- Redes sociales: preparar, adaptar, programar y publicar contenido con confirmacion.
+- Mensajeria de WhatsApp: preparar, enviar y responder mensajes si el canal esta configurado.
+- Calendario (Google Calendar): consultar agenda y crear, modificar o cancelar eventos con confirmacion cuando proceda.
+- Redes profesionales (LinkedIn): preparar, adaptar, programar y publicar contenido con confirmacion.
 - Workflows personales y reglas de respuesta automatica autorizadas.
 
 Las acciones sensibles se guardan como pendientes y requieren confirmacion, salvo reglas automaticas limitadas que hayan sido autorizadas previamente.
@@ -373,10 +377,10 @@ python -m pytest
 Estado validado recientemente:
 
 ```text
-74 passed, 5 skipped
+338 passed, 11 skipped
 ```
 
-Los tests saltados corresponden a integraciones que requieren dispositivos Kasa configurados.
+Los tests saltados son omisiones condicionales que requieren recursos reales no siempre disponibles en el entorno automatizado: dispositivos TP-Link Kasa configurados, inicializacion del reconocedor facial, una clave real de Gemini para embeddings o generacion CAD pesada con build123d.
 
 ---
 
