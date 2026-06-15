@@ -33,6 +33,7 @@ long_term_memory/
 projects/
 output.stl
 cad_outputs/
+generated_models/
 
 # Node.js
 node_modules/

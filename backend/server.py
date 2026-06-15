@@ -31,6 +31,7 @@ import sys
 import os
 import json
 import time
+import base64
 import unicodedata
 import re
 import ctypes
@@ -75,7 +76,18 @@ from music_manager import music_manager
 from task_manager import task_manager
 
 # Create a Socket.IO server
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+# Allow large frames: CAD STL payloads (e.g. Jarvis' own high-res robot body)
+# can be tens of MB as base64. We run on localhost so a generous buffer is safe.
+# Default is 1MB, which would reject big STL meshes. Configurable via env.
+try:
+    _MAX_SOCKET_BUFFER = int(os.getenv("JARVIS_MAX_SOCKET_BUFFER_BYTES", str(100 * 1024 * 1024)))
+except ValueError:
+    _MAX_SOCKET_BUFFER = 100 * 1024 * 1024
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*',
+    max_http_buffer_size=_MAX_SOCKET_BUFFER,
+)
 
 # Music events are emitted through the shared MusicManager so both HTTP endpoints
 # and the live voice tools (jarvis.py) reach the frontend via the same path.
@@ -429,18 +441,72 @@ authenticator = None
 kasa_agent = KasaAgent(known_devices=SETTINGS.get("kasa_devices"))
 # tool_permissions is now SETTINGS["tool_permissions"]
 
+async def _on_auth_status(is_auth):
+    print(f"[SERVER] Auth status change: {is_auth}")
+    await sio.emit('auth_status', {'authenticated': is_auth})
+    if is_auth:
+        await dispatch_automation_event("camera.real_person_verified", {"source": "face_auth"})
+
+
+async def _on_auth_frame(frame_b64):
+    await sio.emit('auth_frame', {'image': frame_b64})
+
+
+def ensure_authenticator():
+    """Lazily build the FaceAuthenticator only when face auth is actually used.
+
+    The constructor loads two OpenCV ONNX models (YuNet + SFace) into memory, so
+    building it when face_auth_enabled=False just wastes RAM. We defer it until
+    the feature is enabled (at connect or via settings toggle).
+    """
+    global authenticator
+    if authenticator is None:
+        authenticator = FaceAuthenticator(
+            reference_image_path=str(REFERENCE_IMAGE_FILE),
+            on_status_change=_on_auth_status,
+            on_frame=_on_auth_frame,
+        )
+    return authenticator
+
+
 async def require_fresh_face_auth(reload_reference=False):
     """Reset auth state and start face authentication when the feature is enabled."""
-    if not SETTINGS.get("face_auth_enabled", False) or not authenticator:
+    if not SETTINGS.get("face_auth_enabled", False):
+        return
+    ensure_authenticator()
+    if not authenticator:
         return
 
     authenticator.reset_authentication(reload_reference=reload_reference)
     await sio.emit('auth_status', {'authenticated': False})
     asyncio.create_task(authenticator.start_authentication_loop())
 
+async def _wait_for_openwa_ready(max_wait_seconds=None):
+    """Poll OpenWA /health until it responds. OpenWA now boots AFTER the Python
+    backend (staggered startup), so creating the session/webhook immediately fails
+    with 'Cannot connect to 2785' and the webhook FK insert blows up. Wait first."""
+    if not getattr(openwa_bridge, "enabled", True):
+        return False
+    if max_wait_seconds is None:
+        max_wait_seconds = int(os.getenv("JARVIS_OPENWA_STARTUP_WAIT_SECONDS", "120") or 120)
+    deadline = time.time() + max_wait_seconds
+    while time.time() < deadline:
+        try:
+            status = await openwa_bridge.check_status()
+            if status.get("available"):
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(3)
+    return False
+
+
 async def _openwa_session_startup():
     """On server start: ensure the OpenWA session is active and webhook is registered."""
-    await asyncio.sleep(2)  # brief pause so OpenWA has time to respond
+    ready = await _wait_for_openwa_ready()
+    if not ready:
+        print("[OPENWA] Session startup deferred: OpenWA not reachable yet. The watchdog will retry.")
+        return
     try:
         result = await openwa_bridge.ensure_session_active()
         action = result.get("action", "")
@@ -742,6 +808,64 @@ async def api_project_activate(project_name: str):
         "current_project": current_project,
         "project": _project_summary(project_path),
     }
+
+
+def _models_root():
+    root = PROJECT_ROOT / "generated_models"
+    root.mkdir(exist_ok=True)
+    return root.resolve()
+
+
+def _prettify_model_name(filename: str) -> str:
+    stem = Path(filename).stem
+    parts = stem.split("_", 1)
+    if len(parts) == 2 and parts[0].isdigit():
+        stem = parts[1]
+    return stem.replace("_", " ").strip() or filename
+
+
+@app.get("/api/cad/models")
+async def api_cad_models():
+    """List every STL Jarvis has generated (persistent library), newest first."""
+    root = _models_root()
+    models = []
+    for path in root.glob("*.stl"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        models.append({
+            "id": path.name,
+            "name": _prettify_model_name(path.name),
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+        })
+    models.sort(key=lambda m: m["modified"], reverse=True)
+    return {"success": True, "models": models}
+
+
+@app.get("/api/cad/models/{model_id}")
+async def api_cad_model(model_id: str):
+    """Return a saved STL as base64, in the shape the CAD viewer expects."""
+    root = _models_root()
+    candidate = (root / Path(model_id).name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid model id.") from exc
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Model not found.")
+
+    with open(candidate, "rb") as f:
+        raw = f.read()
+    return {
+        "success": True,
+        "format": "stl",
+        "data": base64.b64encode(raw).decode("ascii"),
+        "name": _prettify_model_name(candidate.name),
+        "id": candidate.name,
+    }
+
 
 def _get_memory():
     """Return the live SemanticMemory instance, or raise 503 if unavailable."""
@@ -3293,27 +3417,8 @@ async def connect(sid, environ):
     await sio.emit('status', {'msg': 'Connected to J.A.R.V.I.S Backend'}, room=sid)
     await sio.emit('simulation_status', simulation_manager.get_state(), room=sid)
 
-    global authenticator
-    
-    # Callback for Auth Status
-    async def on_auth_status(is_auth):
-        print(f"[SERVER] Auth status change: {is_auth}")
-        await sio.emit('auth_status', {'authenticated': is_auth})
-        if is_auth:
-            await dispatch_automation_event("camera.real_person_verified", {"source": "face_auth"})
-
-    # Callback for Auth Camera Frames
-    async def on_auth_frame(frame_b64):
-        await sio.emit('auth_frame', {'image': frame_b64})
-
-    # Initialize Authenticator if not already done
-    if authenticator is None:
-        authenticator = FaceAuthenticator(
-            reference_image_path=str(REFERENCE_IMAGE_FILE),
-            on_status_change=on_auth_status,
-            on_frame=on_auth_frame
-        )
-    
+    # Only build the face authenticator (loads OpenCV ONNX models = RAM) when the
+    # feature is actually enabled; otherwise auto-authenticate without touching it.
     if SETTINGS.get("face_auth_enabled", False):
         await require_fresh_face_auth(reload_reference=True)
     else:

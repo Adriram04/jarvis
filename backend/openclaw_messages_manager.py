@@ -6,6 +6,11 @@ from pathlib import Path
 from threading import Lock
 
 
+# Retention bounds to keep the local message store from growing without limit.
+MAX_MESSAGES = 1000
+MAX_RAW_CHARS = 4000
+
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -81,7 +86,7 @@ class OpenClawMessagesManager:
             "conversation_id": _clean(conversation_id),
             "timestamp": _clean(timestamp) or _now_iso(),
             "read": bool(read),
-            "raw": deepcopy(raw or {}),
+            "raw": self._trim_raw(raw),
             "created_at": _now_iso(),
         }
 
@@ -190,6 +195,20 @@ class OpenClawMessagesManager:
                 return existing
         return None
 
+    def _trim_raw(self, raw):
+        """Keep ``raw`` payloads bounded so the message store cannot grow
+        without limit. Small payloads are preserved; large ones are replaced
+        by a truncated marker."""
+        if not raw:
+            return {}
+        try:
+            text = json.dumps(raw, ensure_ascii=False)
+        except Exception:
+            return {"_unserializable": True}
+        if len(text) <= MAX_RAW_CHARS:
+            return deepcopy(raw)
+        return {"_truncated": True, "_size": len(text), "_preview": text[:MAX_RAW_CHARS]}
+
     def _load(self):
         if not self.storage_path.exists():
             self._save()
@@ -202,6 +221,8 @@ class OpenClawMessagesManager:
             self._save()
 
     def _save(self):
+        if len(self._messages) > MAX_MESSAGES:
+            self._messages = self._messages[-MAX_MESSAGES:]
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self.storage_path.write_text(json.dumps(self._messages, indent=2, ensure_ascii=False), encoding="utf-8")
 

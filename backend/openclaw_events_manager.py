@@ -21,6 +21,10 @@ ALLOWED_EVENT_TYPES = {
     "automation.skipped_conditions",
 }
 
+# Retention bounds to keep the local event log from growing without limit.
+MAX_EVENTS = 1000
+MAX_RAW_CHARS = 4000
+
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -66,7 +70,7 @@ class OpenClawEventsManager:
             "message": self._trim_message(message),
             "success": bool(success),
             "error": _clean(error) or None,
-            "raw": deepcopy(raw or {}),
+            "raw": self._trim_raw(raw),
             "created_at": _now_iso(),
         }
 
@@ -98,6 +102,20 @@ class OpenClawEventsManager:
         text = _clean(message)
         return text[:max_length] + ("..." if len(text) > max_length else "")
 
+    def _trim_raw(self, raw):
+        """Keep ``raw`` payloads bounded so the event log cannot grow without
+        limit. Small payloads are preserved; large ones are replaced by a
+        truncated marker."""
+        if not raw:
+            return {}
+        try:
+            text = json.dumps(raw, ensure_ascii=False)
+        except Exception:
+            return {"_unserializable": True}
+        if len(text) <= MAX_RAW_CHARS:
+            return deepcopy(raw)
+        return {"_truncated": True, "_size": len(text), "_preview": text[:MAX_RAW_CHARS]}
+
     def _load(self):
         if not self.storage_path.exists():
             self._save()
@@ -110,6 +128,8 @@ class OpenClawEventsManager:
             self._save()
 
     def _save(self):
+        if len(self._events) > MAX_EVENTS:
+            self._events = self._events[-MAX_EVENTS:]
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self.storage_path.write_text(json.dumps(self._events, indent=2, ensure_ascii=False), encoding="utf-8")
 

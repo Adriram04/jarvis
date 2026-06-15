@@ -119,6 +119,109 @@ class TestCadScriptSafety:
         assert agent._extract_hole_count("rectangular support 80 by 40 with 2 holes") == 2
 
 
+class TestSelfDesign:
+    """Test the 'design yourself' command that returns Jarvis' own robot body."""
+
+    def test_detects_self_design_commands(self):
+        agent = CadAgent()
+
+        assert agent._is_self_design_prompt("Diseña a Jarvis tal cual te imaginas tu")
+        assert agent._is_self_design_prompt("muéstrame tu cuerpo")
+        assert agent._is_self_design_prompt("diséñate")
+        assert agent._is_self_design_prompt("crea a jarvis")
+        assert agent._is_self_design_prompt("genera el robot pixel plus")
+
+    def test_ignores_ordinary_cad_requests(self):
+        agent = CadAgent()
+
+        assert not agent._is_self_design_prompt("genera un soporte rectangular con 4 agujeros")
+        assert not agent._is_self_design_prompt("a robot arm bracket")
+        assert not agent._is_self_design_prompt("haz una caja de 10mm")
+
+    def _write_unit_cube_stl(self, path, z_offset=0.0, straddle=False):
+        """Write a tiny binary STL (one triangle) for merge tests.
+
+        With straddle=True the triangle spans both sides of Z=0 (like a centred
+        body part); otherwise it sits flat at z_offset (like an offset arm).
+        """
+        import struct
+
+        normal = (0.0, 0.0, 1.0)
+        if straddle:
+            verts = [(0.0, 0.0, -5.0), (1.0, 0.0, 0.0), (0.0, 1.0, 5.0)]
+        else:
+            verts = [(0.0, 0.0, z_offset), (1.0, 0.0, z_offset), (0.0, 1.0, z_offset)]
+        with open(path, "wb") as f:
+            f.write(b"\x00" * 80)
+            f.write(struct.pack("<I", 1))
+            f.write(struct.pack(
+                "<12fH",
+                *normal,
+                *verts[0], *verts[1], *verts[2],
+                0,
+            ))
+
+    def test_read_roundtrip_and_merge(self, tmp_path):
+        agent = CadAgent()
+        p = tmp_path / "part.stl"
+        self._write_unit_cube_stl(str(p))
+
+        triangles = agent._read_stl_triangles(str(p))
+        assert len(triangles) == 1
+        assert triangles[0][1] == (0.0, 0.0, 0.0)
+
+    def test_mirror_reverses_winding_and_flips_z(self):
+        agent = CadAgent()
+        tris = [((0.0, 0.0, 1.0), (1.0, 2.0, 3.0), (4.0, 5.0, 6.0), (7.0, 8.0, 9.0))]
+
+        mirrored = agent._mirror_triangles_z(tris)
+
+        n, a, b, c = mirrored[0]
+        assert n == (0.0, 0.0, -1.0)
+        assert a == (1.0, 2.0, -3.0)
+        # vertices 2 and 3 swapped to keep outward-facing normals
+        assert b == (7.0, 8.0, -9.0)
+        assert c == (4.0, 5.0, -6.0)
+
+    def test_should_mirror_only_offset_parts(self):
+        agent = CadAgent()
+        offset = [((0, 0, 1), (0, 0, 10), (1, 0, 11), (0, 1, 12))]   # entirely +Z
+        centred = [((0, 0, 1), (0, 0, -5), (1, 0, 0), (0, 1, 5))]    # straddles centre
+
+        assert agent._should_mirror_part(offset) is True
+        assert agent._should_mirror_part(centred) is False
+
+    @pytest.mark.asyncio
+    async def test_assemble_from_synthetic_parts(self, tmp_path, monkeypatch):
+        agent = CadAgent()
+        agent.self_design_delay_seconds = 0
+
+        parts_dir = tmp_path / "stl_files"
+        parts_dir.mkdir()
+        # A centred part and an offset part (only the offset one should be mirrored).
+        self._write_unit_cube_stl(str(parts_dir / "Body - Chest.stl"), straddle=True)
+        self._write_unit_cube_stl(str(parts_dir / "Body - Arm.stl"), z_offset=20.0)
+        agent.robot_stl_dir = str(parts_dir)
+
+        out = tmp_path / "robot.stl"
+        result = await agent._generate_self_portrait(str(out))
+
+        assert result is not None
+        assert result["format"] == "stl"
+        assert out.exists()
+        # centred(1) + offset(1) + mirrored offset(1) = 3 triangles
+        triangles = agent._read_stl_triangles(str(out))
+        assert len(triangles) == 3
+
+    @pytest.mark.asyncio
+    async def test_self_portrait_returns_none_without_parts(self, tmp_path):
+        agent = CadAgent()
+        agent.robot_stl_dir = str(tmp_path / "missing")
+
+        result = await agent._generate_self_portrait(str(tmp_path / "out.stl"))
+        assert result is None
+
+
 class TestCadGeneration:
     """Test CAD generation (requires API key)."""
     

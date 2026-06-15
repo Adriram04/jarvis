@@ -8,11 +8,17 @@ class ProjectManager:
     def __init__(self, workspace_root: str):
         self.workspace_root = Path(workspace_root)
         self.projects_dir = self.workspace_root / "projects"
+        # Persistent library for every STL Jarvis generates. Unlike the 'temp'
+        # project (wiped on startup), this folder survives so models can be
+        # reopened later from the CAD viewer.
+        self.models_dir = self.workspace_root / "generated_models"
         self.current_project = "temp"
-        
+
         # Ensure projects root exists
         if not self.projects_dir.exists():
             self.projects_dir.mkdir(parents=True)
+
+        self.models_dir.mkdir(parents=True, exist_ok=True)
             
         # Clear temp project on startup if it exists
         temp_path = self.projects_dir / "temp"
@@ -119,10 +125,56 @@ class ProjectManager:
         try:
             shutil.copy2(source, dest_path)
             print(f"[ProjectManager] Saved CAD artifact to: {dest_path}")
+            # Also keep a copy in the persistent library so it can be reopened later.
+            try:
+                shutil.copy2(source, self.models_dir / filename)
+            except Exception as lib_err:
+                print(f"[ProjectManager] [WARN] Could not copy to model library: {lib_err}")
             return str(dest_path)
         except Exception as e:
             print(f"[ProjectManager] [ERR] Failed to save artifact: {e}")
             return None
+
+    def _prettify_model_name(self, filename: str) -> str:
+        stem = Path(filename).stem
+        # Drop the leading unix-timestamp prefix we add on save (e.g. "1700000000_toaster").
+        parts = stem.split("_", 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            stem = parts[1]
+        return stem.replace("_", " ").strip() or filename
+
+    def list_generated_models(self):
+        """Returns metadata for every STL in the persistent library, newest first."""
+        if not self.models_dir.exists():
+            return []
+        models = []
+        for path in self.models_dir.glob("*.stl"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            models.append({
+                "id": path.name,
+                "name": self._prettify_model_name(path.name),
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+            })
+        models.sort(key=lambda m: m["modified"], reverse=True)
+        return models
+
+    def get_generated_model_path(self, model_id: str):
+        """Resolves a library model id to a path, guarding against traversal."""
+        if not model_id:
+            return None
+        # Only accept a bare filename inside the library directory.
+        candidate = (self.models_dir / Path(model_id).name).resolve()
+        try:
+            candidate.relative_to(self.models_dir.resolve())
+        except ValueError:
+            return None
+        if candidate.exists() and candidate.is_file():
+            return candidate
+        return None
 
     def get_project_context(self, max_file_size: int = 10000) -> str:
         """

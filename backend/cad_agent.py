@@ -6,6 +6,7 @@ import subprocess
 import sys
 import re
 import math
+import struct
 from datetime import datetime
 from google import genai
 from google.genai import errors, types
@@ -24,6 +25,17 @@ DEFAULT_CAD_FALLBACK_MODELS = "gemini-2.5-flash-lite"
 DEFAULT_CAD_THINKING_BUDGET = -1
 # More self-correction passes = better final geometry without a pricier model.
 DEFAULT_CAD_MAX_RETRIES = 4
+# "Design yourself" easter egg defaults. The robot STL parts live next to the
+# jarvis project, inside the Robot/pixel_plus display folder.
+DEFAULT_ROBOT_STL_DIR = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "Robot", "pixel_plus", "pixel_plus_display", "stl_files",
+    )
+)
+# How long the fake "design process" takes, spread across the streamed thoughts,
+# so it feels like Jarvis is really modelling its own body.
+DEFAULT_SELF_DESIGN_DELAY_SECONDS = 9
 BLOCKED_GENERATED_CODE_IMPORTS = {
     "ctypes",
     "importlib",
@@ -60,7 +72,18 @@ class CadAgent:
         self.max_retries = max(1, self._resolve_int_env(
             "JARVIS_CAD_MAX_RETRIES", DEFAULT_CAD_MAX_RETRIES
         ))
-        
+        # "Design yourself" easter egg: a specific command makes Jarvis return its
+        # own robot body (the pixel_plus STL parts), fused into one model, instead
+        # of asking Gemini for fresh geometry. It still streams realistic design
+        # "thoughts" and a processing delay so it looks like Jarvis built it live.
+        self.robot_stl_dir = os.getenv("JARVIS_ROBOT_STL_DIR", DEFAULT_ROBOT_STL_DIR)
+        self.self_design_delay_seconds = self._resolve_int_env(
+            "JARVIS_SELF_DESIGN_DELAY_SECONDS", DEFAULT_SELF_DESIGN_DELAY_SECONDS
+        )
+        self.self_design_mirror = os.getenv(
+            "JARVIS_SELF_DESIGN_MIRROR", "1"
+        ).strip().lower() not in ("0", "false", "no")
+
         self.system_instruction = """
 You are a senior mechanical/CAD engineer who writes Python scripts with the
 `build123d` library to produce models that will be 3D printed on a normal FDM
@@ -477,6 +500,219 @@ export_stl(result_part, {output_filename!r})
             "file_path": output_stl
         }
 
+    # ------------------------------------------------------------------ #
+    #  "Design yourself" easter egg: Jarvis builds its own robot body.     #
+    # ------------------------------------------------------------------ #
+    def _is_self_design_prompt(self, prompt):
+        """True when the user asks Jarvis to design/build its own body.
+
+        Triggers on natural phrasings like "diseña a Jarvis tal cual te
+        imaginas", "construye tu cuerpo", "diséñate", "build the robot",
+        "the pixel plus robot", etc. Kept specific enough not to fire on
+        ordinary CAD requests such as "a robot arm bracket".
+        """
+        text = (prompt or "").lower()
+
+        # Strong standalone phrases that always mean "build yourself".
+        strong_phrases = (
+            "diseñate", "diséñate", "construyete", "constrúyete",
+            "te imaginas", "como te imaginas", "tal cual te imaginas",
+            "tu propio cuerpo", "tu cuerpo", "your own body", "your body",
+            "yourself", "ti mismo", "a ti mismo",
+            "pixel plus", "pixel_plus",
+        )
+        if any(phrase in text for phrase in strong_phrases):
+            return True
+
+        # Otherwise require a self-reference AND a design/build verb together.
+        self_words = ("jarvis", "pixel")
+        design_verbs = (
+            "diseñ", "disen", "genera", "crea", "construye", "constru",
+            "modela", "imagina", "design", "build", "create", "make", "model",
+        )
+        has_self = any(word in text for word in self_words)
+        has_verb = any(verb in text for verb in design_verbs)
+        return has_self and has_verb
+
+    def _list_robot_part_files(self):
+        """Return the robot STL part files, skipping *.ORIGINAL.* backups."""
+        import glob
+
+        if not os.path.isdir(self.robot_stl_dir):
+            print(f"[CadAgent DEBUG] [SELF] Robot STL dir not found: {self.robot_stl_dir}")
+            return []
+
+        files = sorted(glob.glob(os.path.join(self.robot_stl_dir, "*.stl")))
+        return [f for f in files if ".original." not in os.path.basename(f).lower()]
+
+    def _read_stl_triangles(self, path):
+        """Parse a binary or ASCII STL into a list of (normal, v1, v2, v3) tuples."""
+        with open(path, "rb") as f:
+            data = f.read()
+
+        # Binary STL: 80-byte header + uint32 count + 50 bytes/triangle.
+        if len(data) >= 84:
+            count = struct.unpack_from("<I", data, 80)[0]
+            if len(data) == 84 + count * 50:
+                triangles = []
+                offset = 84
+                for _ in range(count):
+                    vals = struct.unpack_from("<12f", data, offset)
+                    triangles.append((
+                        (vals[0], vals[1], vals[2]),
+                        (vals[3], vals[4], vals[5]),
+                        (vals[6], vals[7], vals[8]),
+                        (vals[9], vals[10], vals[11]),
+                    ))
+                    offset += 50
+                return triangles
+
+        # Fallback: ASCII STL.
+        text = data.decode("utf-8", errors="replace")
+        floats_re = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+        triangles = []
+        normal = (0.0, 0.0, 0.0)
+        verts = []
+        for line in text.splitlines():
+            stripped = line.strip().lower()
+            if stripped.startswith("facet normal"):
+                nums = floats_re.findall(line)
+                normal = tuple(float(n) for n in nums[:3]) if len(nums) >= 3 else (0.0, 0.0, 0.0)
+                verts = []
+            elif stripped.startswith("vertex"):
+                nums = floats_re.findall(line)
+                if len(nums) >= 3:
+                    verts.append((float(nums[0]), float(nums[1]), float(nums[2])))
+            elif stripped.startswith("endfacet") and len(verts) == 3:
+                triangles.append((normal, verts[0], verts[1], verts[2]))
+                verts = []
+        return triangles
+
+    def _mirror_triangles_z(self, triangles):
+        """Mirror triangles across the Z=0 plane, keeping outward-facing normals.
+
+        Reflecting flips face winding, so we negate Z on the normal and the
+        vertices AND swap two vertices to restore a valid, correctly-lit solid.
+        """
+        mirrored = []
+        for normal, a, b, c in triangles:
+            mirrored.append((
+                (normal[0], normal[1], -normal[2]),
+                (a[0], a[1], -a[2]),
+                (c[0], c[1], -c[2]),
+                (b[0], b[1], -b[2]),
+            ))
+        return mirrored
+
+    def _should_mirror_part(self, triangles):
+        """Mirror only parts that sit entirely on one side of the centre plane.
+
+        Laterally-offset parts (an arm at +Z) become symmetric pairs, while
+        parts that straddle the centre (torso, head, central leg/foot) are left
+        alone so the mirror never creates overlapping duplicates.
+        """
+        tol = 2.0
+        zs = [v[2] for _, a, b, c in triangles for v in (a, b, c)]
+        if not zs:
+            return False
+        z_min, z_max = min(zs), max(zs)
+        return z_min >= -tol or z_max <= tol
+
+    def _write_binary_stl(self, triangles, out_path):
+        with open(out_path, "wb") as f:
+            f.write(b"\x00" * 80)
+            f.write(struct.pack("<I", len(triangles)))
+            for normal, a, b, c in triangles:
+                f.write(struct.pack(
+                    "<12fH",
+                    normal[0], normal[1], normal[2],
+                    a[0], a[1], a[2],
+                    b[0], b[1], b[2],
+                    c[0], c[1], c[2],
+                    0,
+                ))
+
+    def _assemble_robot_stl(self, output_stl):
+        """Fuse the robot parts (with optional symmetry mirroring) into one STL.
+
+        Returns the triangle count, or None if no parts were found/parsed.
+        """
+        part_files = self._list_robot_part_files()
+        if not part_files:
+            return None
+
+        all_triangles = []
+        for path in part_files:
+            try:
+                triangles = self._read_stl_triangles(path)
+            except Exception as exc:
+                print(f"[CadAgent DEBUG] [SELF] Failed to read '{path}': {exc}")
+                continue
+            if not triangles:
+                continue
+            all_triangles.extend(triangles)
+            if self.self_design_mirror and self._should_mirror_part(triangles):
+                all_triangles.extend(self._mirror_triangles_z(triangles))
+
+        if not all_triangles:
+            return None
+
+        self._write_binary_stl(all_triangles, output_stl)
+        return len(all_triangles)
+
+    def _self_design_thoughts(self):
+        """Realistic design narration so it looks like Jarvis is modelling itself."""
+        return [
+            "Petición recibida: diseñarme a mí mismo. Visualizando mi propia carcasa...\n",
+            "Descomponiendo el cuerpo en módulos: cabeza, torso, brazos y base de apoyo.\n",
+            "Cabeza: domo frontal, sección media y tapa trasera. Alto ~90mm, ojos integrados.\n",
+            "Torso: pecho frontal, espalda y placas laterales. Ancho ~64mm, paredes >=1.8mm.\n",
+            "Brazo articulado a la altura del pecho. Reflejándolo en el eje Z para simetría bilateral.\n",
+            "Base: pierna central y pie ancho para un apoyo estable sobre la superficie.\n",
+            "Fusionando todas las piezas en un único sólido estanco y verificando normales...\n",
+            "Geometría coherente. Exportando malla a STL. Render listo.\n",
+        ]
+
+    async def _generate_self_portrait(self, output_stl):
+        """Stream a fake design process and return Jarvis' own robot body as STL."""
+        print("[CadAgent DEBUG] [SELF] Self-design command detected. Assembling robot body.")
+
+        if not self._list_robot_part_files():
+            return None
+
+        if self.on_status:
+            self.on_status({
+                "status": "generating",
+                "attempt": 1,
+                "max_attempts": 1,
+                "error": None,
+            })
+
+        thoughts = self._self_design_thoughts()
+        per_thought_delay = max(0.0, self.self_design_delay_seconds / max(1, len(thoughts)))
+        for thought in thoughts:
+            if self.on_thought:
+                self.on_thought(thought)
+            if per_thought_delay:
+                await asyncio.sleep(per_thought_delay)
+
+        triangle_count = await asyncio.to_thread(self._assemble_robot_stl, output_stl)
+        if not triangle_count or not os.path.exists(output_stl):
+            print("[CadAgent DEBUG] [SELF] Robot assembly produced no geometry.")
+            return None
+
+        print(f"[CadAgent DEBUG] [SELF] Robot body assembled: {triangle_count} triangles -> {output_stl}")
+
+        with open(output_stl, "rb") as f:
+            stl_data = f.read()
+
+        import base64
+        return {
+            "format": "stl",
+            "data": base64.b64encode(stl_data).decode("utf-8"),
+            "file_path": output_stl,
+        }
+
     async def generate_prototype(self, prompt: str, output_dir: Optional[str] = None):
         """
         Generates 3D geometry by asking Gemini for a script, then running it LOCALLY.
@@ -499,6 +735,15 @@ export_stl(result_part, {output_filename!r})
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_stl = os.path.join(work_dir, f"output_{timestamp}.stl")
             script_path = os.path.join(work_dir, "current_design.py")
+
+            # "Design yourself" command: skip Gemini and assemble Jarvis' own
+            # robot body from the pixel_plus STL parts. Falls through to normal
+            # generation if the parts are missing or the merge fails.
+            if self._is_self_design_prompt(prompt):
+                self_portrait = await self._generate_self_portrait(output_stl)
+                if self_portrait:
+                    return self_portrait
+                print("[CadAgent DEBUG] [SELF] Self-portrait unavailable; falling back to model generation.")
 
             max_retries = self.max_retries
             current_prompt = (

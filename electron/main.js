@@ -415,7 +415,9 @@ function createWindow() {
                 console.log('Frontend loaded successfully!');
                 windowWasShown = true;
                 mainWindow.show();
-                if (isDev) {
+                // DevTools ya no se abre solo (infla el renderer). Actívalo con
+                // JARVIS_DEVTOOLS=true o, en caliente, con F12 / Ctrl+Shift+I.
+                if (isDev && envFlag('JARVIS_DEVTOOLS', false)) {
                     mainWindow.webContents.openDevTools();
                 }
             })
@@ -478,20 +480,29 @@ app.whenReady().then(async () => {
     });
 
     await startOpenClawGateway();
-    await startOpenWAService();
 
-    checkBackendPort(8000).then((isTaken) => {
-        if (isTaken) {
-            console.log('Port 8000 is taken. Assuming backend is already running manually.');
-            waitForBackend().then(createWindow);
-        } else {
-            startPythonBackend();
-            // Give it a moment to start, then wait for health check
-            setTimeout(() => {
-                waitForBackend().then(createWindow);
-            }, 1000);
-        }
-    });
+    // Arranque ESCALONADO para no solapar los picos de RAM (lo que dispara el
+    // MemoryError cuando todo arranca a la vez):
+    //   1) Backend Python (nucleo) y esperamos a que responda /status.
+    //   2) Mostramos la ventana en cuanto el backend esta sano.
+    //   3) OpenWA al final: es lo MAS pesado (lanza su propio Chromium via
+    //      whatsapp-web.js), con un retardo para que no coincida con el
+    //      arranque del renderer de Electron.
+    const backendTaken = await checkBackendPort(8000);
+    if (backendTaken) {
+        console.log('Port 8000 is taken. Assuming backend is already running manually.');
+    } else {
+        startPythonBackend();
+    }
+    await waitForBackend();
+    createWindow();
+
+    const openwaDelayMs = Number(process.env.JARVIS_OPENWA_START_DELAY_MS || 4000);
+    setTimeout(() => {
+        startOpenWAService().catch((err) => {
+            console.error('OpenWA failed to start:', err.message);
+        });
+    }, openwaDelayMs);
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -69,11 +69,17 @@ client = genai.Client(http_options={"api_version": "v1beta"}, api_key=os.getenv(
 # Function definitions
 generate_cad = {
     "name": "generate_cad",
-    "description": "Generates a 3D CAD model based on a prompt.",
+    "description": (
+        "Generates a 3D CAD model based on a prompt. If the user asks you to design "
+        "or build YOURSELF / your own body / the robot ('diseña a Jarvis', 'diséñate', "
+        "'tal cual te imaginas', 'construye tu cuerpo', 'el robot Pixel Plus'), call "
+        "this tool and pass their phrasing through in the prompt (keep the words "
+        "'Jarvis' / 'tu cuerpo' / 'pixel plus') so your own robot body is assembled."
+    ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "prompt": {"type": "STRING", "description": "The description of the object to generate."}
+            "prompt": {"type": "STRING", "description": "The description of the object to generate. For self-design requests, keep the user's wording (e.g. 'Jarvis tal cual te imaginas')."}
         },
         "required": ["prompt"]
     },
