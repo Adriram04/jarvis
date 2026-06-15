@@ -297,6 +297,8 @@ signal.signal(signal.SIGTERM, signal_handler)
 # Global state
 audio_loop = None
 loop_task = None
+_jarvis_starting = False       # guards the cold-start readiness gate
+_jarvis_started_once = False   # only wait for modules on the first start
 authenticator = None
 kasa_agent = KasaAgent()
 openclaw_bridge = OpenClawBridge()
@@ -488,7 +490,7 @@ async def _wait_for_openwa_ready(max_wait_seconds=None):
     if not getattr(openwa_bridge, "enabled", True):
         return False
     if max_wait_seconds is None:
-        max_wait_seconds = int(os.getenv("JARVIS_OPENWA_STARTUP_WAIT_SECONDS", "120") or 120)
+        max_wait_seconds = _env_int("JARVIS_OPENWA_STARTUP_WAIT_SECONDS", 120)
     deadline = time.time() + max_wait_seconds
     while time.time() < deadline:
         try:
@@ -499,6 +501,51 @@ async def _wait_for_openwa_ready(max_wait_seconds=None):
             pass
         await asyncio.sleep(3)
     return False
+
+
+async def _wait_for_whatsapp_ready(max_wait_seconds=None):
+    """Wait until the OpenWA WhatsApp session reports 'ready'. Bounded: if it needs
+    a QR scan it will never become ready on its own, so we give up and let the
+    caller proceed."""
+    if not getattr(openwa_bridge, "enabled", False):
+        return False
+    if max_wait_seconds is None:
+        max_wait_seconds = _env_int("JARVIS_OPENWA_READY_WAIT_SECONDS", 45)
+    # Nudge the session so it starts connecting.
+    try:
+        await openwa_bridge.ensure_session_active()
+    except Exception:
+        pass
+    deadline = time.time() + max_wait_seconds
+    while time.time() < deadline:
+        try:
+            info = await openwa_bridge.get_session_info()
+            status = str(info.get("status") or "").lower()
+            if status == "ready":
+                return True
+            if status == "qr_ready":
+                return False  # needs a QR scan; won't become ready on its own
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    return False
+
+
+async def _wait_for_modules_ready():
+    """Hold JARVIS startup until external modules are up, so the agent is only
+    'ready' once it can actually use them (especially WhatsApp). All waits are
+    bounded — JARVIS starts anyway if a module is slow or needs a QR scan."""
+    if not getattr(openwa_bridge, "enabled", False):
+        return
+    await sio.emit('status', {'msg': 'Esperando a OpenWA...'})
+    if not await _wait_for_openwa_ready(60):
+        print("[STARTUP] OpenWA not reachable; starting JARVIS anyway.")
+        return
+    await sio.emit('status', {'msg': 'Conectando WhatsApp...'})
+    if await _wait_for_whatsapp_ready():
+        print("[STARTUP] WhatsApp session ready. Starting JARVIS.")
+    else:
+        print("[STARTUP] WhatsApp not ready yet (may need QR); starting JARVIS anyway.")
 
 
 async def _openwa_session_startup():
@@ -1259,7 +1306,18 @@ def _env_bool(name, default=False):
     raw = os.getenv(name)
     if raw is None:
         return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    # Strip any inline '# comment' since the project's .env loader keeps it.
+    token = str(raw).split("#", 1)[0].strip().lower()
+    return token in {"1", "true", "yes", "on"}
+
+def _env_int(name, default):
+    """Read an int env var, tolerating trailing junk/inline comments since the
+    project's .env loader does not strip inline '# ...' comments."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    match = re.match(r"\s*(-?\d+)", str(raw))
+    return int(match.group(1)) if match else default
 
 def _whatsapp_provider():
     """Returns the configured WhatsApp provider ('openwa' or 'openclaw')."""
@@ -1999,24 +2057,34 @@ async def _notify_pending_action_resolution(result, source="panel", room=None):
     message = _message_from_pending_result(result)
     await sio.emit('openclaw_pending_action', None, room=room)
 
+    speak = _env_bool("JARVIS_SPEAK_ACTION_RESULT", True)
     session = getattr(audio_loop, "session", None) if audio_loop else None
-    if session:
+    spoken_by_model = False
+    if session and speak:
+        # The WhatsApp tool sets an ~8s output-suppression window when it prepares
+        # the send; clear it so Jarvis can actually voice the final result.
+        if hasattr(audio_loop, "_suppress_model_output_until"):
+            audio_loop._suppress_model_output_until = 0.0
         try:
             await session.send(
                 input=(
-                    "El usuario ha confirmado o resuelto una accion pendiente "
-                    f"desde {source}. La accion ya esta procesada. "
-                    f"Resultado: {message}. "
-                    "Actualiza solo tu contexto interno. No respondas ni repitas este resultado."
+                    "El usuario acaba de confirmar o resolver una accion pendiente "
+                    f"desde {source}. Resultado real de la accion: {message}. "
+                    "Diselo al usuario EN VOZ ALTA, de forma breve y natural: si se completo "
+                    "o si fallo (y por que si fallo). No vuelvas a ejecutar la accion."
                 ),
-                end_of_turn=False,
+                end_of_turn=True,
             )
+            spoken_by_model = True
         except Exception as exc:
             print(f"[SERVER] Could not notify live Jarvis session about pending action resolution: {exc}")
 
-    await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=room)
-    if audio_loop and getattr(audio_loop, "project_manager", None):
-        audio_loop.project_manager.log_chat("JARVIS", message)
+    # If Jarvis is going to speak it, let its own streamed transcription populate
+    # the chat (avoids a duplicate line). Otherwise surface the text directly.
+    if not spoken_by_model:
+        await sio.emit('transcription', {'sender': 'JARVIS', 'text': message, 'append': False}, room=room)
+        if audio_loop and getattr(audio_loop, "project_manager", None):
+            audio_loop.project_manager.log_chat("JARVIS", message)
 
 def _autopilot_mutation_result(action_type, rule, label):
     if not rule:
@@ -3447,8 +3515,24 @@ async def start_audio(sid, data=None):
             await sio.emit('error', {'msg': 'Authentication Required'})
             return
 
+    # Cold-start readiness gate: bring JARVIS up LAST, once the other modules
+    # (OpenWA + its WhatsApp session) are ready, so the agent doesn't try to use
+    # them before they connect. Only the first start waits; bounded internally.
+    global _jarvis_starting, _jarvis_started_once
+    if _jarvis_starting:
+        await sio.emit('status', {'msg': 'J.A.R.V.I.S iniciando, espera...'})
+        return
+    if not _jarvis_started_once and _env_bool("JARVIS_WAIT_FOR_MODULES", True):
+        _jarvis_starting = True
+        try:
+            _jarvis_started_once = True
+            print("Waiting for modules (OpenWA/WhatsApp) before starting JARVIS...")
+            await _wait_for_modules_ready()
+        finally:
+            _jarvis_starting = False
+
     print("Starting Audio Loop...")
-    
+
     device_index = None
     device_name = None
     if data:
@@ -3468,7 +3552,6 @@ async def start_audio(sid, data=None):
              print("Audio loop already running. Re-connecting client to session.")
              await sio.emit('status', {'msg': 'J.A.R.V.I.S Already Running'})
              return
-
 
     # Callback to send audio data to frontend
     def on_audio_data(data_bytes):

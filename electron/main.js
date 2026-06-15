@@ -481,13 +481,12 @@ app.whenReady().then(async () => {
 
     await startOpenClawGateway();
 
-    // Arranque ESCALONADO para no solapar los picos de RAM (lo que dispara el
-    // MemoryError cuando todo arranca a la vez):
-    //   1) Backend Python (nucleo) y esperamos a que responda /status.
-    //   2) Mostramos la ventana en cuanto el backend esta sano.
-    //   3) OpenWA al final: es lo MAS pesado (lanza su propio Chromium via
-    //      whatsapp-web.js), con un retardo para que no coincida con el
-    //      arranque del renderer de Electron.
+    // Arranque ESCALONADO (evita el pico de RAM simultaneo) y con la VENTANA AL
+    // FINAL para que "todos los modulos arranquen primero y JARVIS el ultimo":
+    //   1) Backend Python (nucleo): esperamos a que responda /status.
+    //   2) OpenWA: esperamos a que este arriba (/health) ANTES de mostrar la UI.
+    //   3) Ventana de JARVIS. El agente (Gemini) ademas espera a que la sesion
+    //      de WhatsApp este 'ready' via la compuerta en start_audio del backend.
     const backendTaken = await checkBackendPort(8000);
     if (backendTaken) {
         console.log('Port 8000 is taken. Assuming backend is already running manually.');
@@ -495,14 +494,16 @@ app.whenReady().then(async () => {
         startPythonBackend();
     }
     await waitForBackend();
-    createWindow();
 
-    const openwaDelayMs = Number(process.env.JARVIS_OPENWA_START_DELAY_MS || 4000);
-    setTimeout(() => {
-        startOpenWAService().catch((err) => {
-            console.error('OpenWA failed to start:', err.message);
-        });
-    }, openwaDelayMs);
+    // OpenWA antes de la ventana. startOpenWAService espera internamente a /health
+    // (timeout 60s) y, si OpenWA esta deshabilitado, retorna enseguida.
+    try {
+        await startOpenWAService();
+    } catch (err) {
+        console.error('OpenWA failed to start:', err.message);
+    }
+
+    createWindow();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
