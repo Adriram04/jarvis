@@ -7,9 +7,7 @@
     "dev": "node scripts/dev_with_openclaw.js",
     "dev:openclaw": "node scripts/dev_with_openclaw.js",
     "build": "vite build",
-    "start": "node scripts/start_electron.js",
-    "wake-listener": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\start_wake_listener.ps1 -Mode dev",
-    "wake-listener:electron": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\start_wake_listener.ps1 -Mode electron"
+    "start": "node scripts/start_electron.js"
   },
   "keywords": [],
   "author": "Adrian Ramirez Gil",
